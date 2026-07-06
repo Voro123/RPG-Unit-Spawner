@@ -16,15 +16,24 @@ function normalizeAssetKind(assetKind) {
   return assetKind === 'tile' ? 'tile' : 'sprite';
 }
 
+function expandSpriteSubject(subject) {
+  const s = subject.trim();
+  if (/^(花|花朵|小花|flower|flowers)$/i.test(s)) {
+    return `${s} — one clearly visible blooming flower with distinct petals, a center, a short stem, and two small leaves`;
+  }
+  return s;
+}
+
 // 像素风强制约束（全英文）。地块和非地块明确分流，避免独立素材被参考图/地块规则铺满。
 function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
-  const subject = promptText.trim();
+  const rawSubject = promptText.trim();
+  const subject = kind === 'sprite' ? expandSpriteSubject(rawSubject) : rawSubject;
   const common =
     `Pixel art asset for a 2D top-down RPG game. Subject: [${subject}]. ` +
     `STRICT rules — flat colors only, visible square pixels, no smoothing/AA/blur/gradients/photorealism. ` +
-    `Draw ONLY what is explicitly described in the subject above. ` +
-    `Do NOT spontaneously add any unrequested objects, decorations, scenery, borders, frames, edges, vignettes, text, logos, UI elements, checkerboards, or mockup backgrounds. `;
+    `Draw the requested subject clearly and do not replace it with background. ` +
+    `Do NOT spontaneously add any unrequested objects, scenery, borders, frames, edges, vignettes, text, logos, UI elements, checkerboards, or mockup backgrounds. `;
 
   let final = common;
   if (kind === 'tile') {
@@ -37,14 +46,14 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   } else {
     final +=
       `Asset type: NON-TILE STANDALONE SPRITE. ` +
-      `Create EXACTLY ONE standalone subject, centered in the image. ` +
-      `For flowers/plants/items/props, draw ONLY that one subject itself. ` +
+      `Composition is mandatory: the subject must occupy about 60% to 80% of the canvas, centered, large, readable, and clearly visible after being downscaled to 32x32. ` +
+      `Create EXACTLY ONE standalone subject. The subject must contain colored visible details; never output only a blank or almost blank background. ` +
+      `If the subject is a flower or plant, petals, flower center, stem, and leaves must be visible. ` +
       `Do NOT draw ground, dirt, grass patches, tile floors, beige paper, shadows, bases, platforms, frames, outlines around the canvas, or any full-canvas texture. ` +
       `Do NOT make a repeating tile and do NOT fill the canvas with decorative texture. ` +
-      `Leave clear empty space around the subject. ` +
-      `The background must be a perfectly uniform chroma key color: RGB(255,0,255), hex ${BG_COLOR}. ` +
-      `Every background pixel must be exactly ${BG_COLOR}; no transparency, no off-white, no beige, no checkerboard, no gradient. ` +
-      `Only the requested subject may use non-magenta colors. `;
+      `Leave clear empty space around the subject, but the subject itself must be large and prominent. ` +
+      `Use a simple flat solid high-contrast background color ${BG_COLOR} behind the subject. ` +
+      `The background should be plain and easy to remove later, but drawing the visible subject is more important than making the background perfectly exact. `;
   }
 
   if (ref) {
@@ -56,11 +65,11 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
       final +=
         `Use the provided reference image ONLY for pixel-art style and color palette. ` +
         `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, border, frame, shadow, ground, or background. ` +
-        `The requested subject must remain one standalone non-tile sprite on the solid ${BG_COLOR} background. `;
+        `The requested subject must remain one large standalone non-tile sprite on a plain solid background. `;
     }
   }
 
-  final += `Output exactly and only what was requested.`;
+  final += `Final check before output: there must be one large visible ${rawSubject} sprite in the center. Output exactly one image.`;
   return final;
 }
 
