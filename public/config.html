@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>配置 · RPG Unit Spawner</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <nav>
+    <a href="/">首页</a>
+    <a href="/config.html" class="active">配置</a>
+    <a href="/sprite.html">精灵图生成</a>
+    <a href="/walk.html">行走图生成</a>
+  </nav>
+  <div class="container">
+    <h1>服务商配置</h1>
+    <div class="card">
+      <p class="muted">当前仅支持 <strong>MINIMAX</strong>。API Key 仅保存在服务端（data/config.json，已 gitignore），不会下发到前端。</p>
+
+      <label>服务商</label>
+      <input value="MINIMAX" disabled />
+
+      <label>API 接入区域（Base URL）</label>
+      <select id="baseUrl">
+        <option value="https://api.minimax.io">国际站 api.minimax.io</option>
+        <option value="https://api.minimaxi.com">国内站 api.minimaxi.com</option>
+      </select>
+      <p class="muted" id="keyHint"></p>
+
+      <label>API Key</label>
+      <input id="apiKey" type="password" placeholder="填入 MINIMAX API Key（留空则保留已保存的）" />
+
+      <label>模型</label>
+      <select id="model"></select>
+
+      <div class="row" style="margin-top:14px">
+        <button id="save">保存配置</button>
+        <button class="ghost" id="test">测试连接</button>
+        <span id="status" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function load() {
+      const c = await (await fetch('/api/config')).json();
+      $('model').innerHTML = c.models
+        .map((m) => `<option value="${m}" ${m === c.model ? 'selected' : ''}>${m}</option>`)
+        .join('');
+      $('baseUrl').value = c.baseUrl;
+      $('status').innerHTML = c.hasKey
+        ? `<span class="ok">已配置 ✓ 当前 Key：${c.apiKeyMask}</span>`
+        : '<span class="err">尚未配置</span>';
+      $('keyHint').textContent = c.hasKey
+        ? '已保存的 Key 为 ' + c.apiKeyMask + '，留空即保留。'
+        : '';
+    }
+
+    $('save').onclick = async () => {
+      const api_key = $('apiKey').value.trim();
+      const model = $('model').value;
+      const base_url = $('baseUrl').value;
+      const r = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'minimax', api_key, model, base_url }),
+      });
+      const j = await r.json();
+      $('status').textContent = j.ok ? '已保存 ✓' : '保存失败：' + (j.error || '');
+      if (j.ok) load();
+    };
+
+    $('test').onclick = async () => {
+      // 先保存当前填写（含区域），再测试
+      const api_key = $('apiKey').value.trim();
+      const model = $('model').value;
+      const base_url = $('baseUrl').value;
+      await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'minimax', api_key, model, base_url }),
+      });
+      $('status').textContent = '测试中…（可能消耗一次生成）';
+      const r = await fetch('/api/config/test', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) $('status').innerHTML = '<span class="ok">连接成功 ✓ Key 有效</span>';
+      else $('status').innerHTML = '<span class="err">连接失败：' + (j.error || 'unknown') + '</span>';
+      load();
+    };
+
+    load();
+  </script>
+</body>
+</html>

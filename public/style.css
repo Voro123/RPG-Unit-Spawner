@@ -1,0 +1,92 @@
+:root {
+  --bg: #0f1115;
+  --panel: #1a1d24;
+  --panel2: #232732;
+  --accent: #6ea8fe;
+  --accent2: #8b5cf6;
+  --text: #e6e8ee;
+  --muted: #9aa3b2;
+  --border: #2c313c;
+  --danger: #ef5350;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+}
+nav {
+  display: flex;
+  gap: 8px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+nav a {
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+nav a:hover, nav a.active { color: var(--text); background: var(--panel2); }
+.container { max-width: 1100px; margin: 0 auto; padding: 24px 20px; }
+h1 { font-size: 22px; margin: 0 0 16px; }
+h2 { font-size: 16px; margin: 20px 0 10px; color: var(--accent); }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 10px 0 4px; }
+input, select, textarea {
+  width: 100%;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 14px;
+}
+textarea { resize: vertical; min-height: 64px; }
+button {
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 14px;
+  cursor: pointer;
+}
+button:disabled { opacity: .5; cursor: not-allowed; }
+button.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+button.danger { background: var(--danger); }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.muted { color: var(--muted); font-size: 13px; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: var(--panel2); color: var(--muted); }
+.ok { color: #4ade80; }
+.err { color: var(--danger); }
+
+/* 精灵图网格 */
+.grid {
+  display: grid;
+  gap: 2px;
+  background: var(--border);
+  border: 2px solid var(--border);
+  width: max-content;
+}
+.cell {
+  width: var(--cs, 64px);
+  height: var(--cs, 64px);
+  background:
+    repeating-conic-gradient(#2a2f3a 0% 25%, #20242e 0% 50%) 50% / 16px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+.cell img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }
+.cell.selected { outline: 3px solid var(--accent); outline-offset: -3px; z-index: 1; }
+.cell .idx { position: absolute; top: 2px; left: 3px; font-size: 10px; color: var(--muted); text-shadow: 0 0 3px #000; }
+.cell.filled .idx { color: #fff; }
+
+.preview-grid canvas { image-rendering: pixelated; border: 1px solid var(--border); }
