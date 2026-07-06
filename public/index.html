@@ -8,7 +8,7 @@
 </head>
 <body>
   <nav>
-    <a href="/">首页</a>
+    <a href="/" class="active">首页</a>
     <a href="/config.html">配置</a>
     <a href="/sprite.html">精灵图生成</a>
     <a href="/walk.html">行走图生成</a>
@@ -16,21 +16,23 @@
   <div class="container">
     <h1>RPG Unit Spawner</h1>
     <div class="card">
-      <p class="muted">用 MINIMAX AI 图像生成，制作像素风游戏素材。</p>
+      <p class="muted">用 MINIMAX AI 图像生成，制作像素风游戏素材。进入网站后请先创建或选择项目；不同项目的精灵图和行走图数据互相隔离。</p>
       <h2>模块</h2>
       <div class="row">
         <a class="card" href="/sprite.html" style="flex:1;min-width:240px;text-decoration:none;color:inherit">
           <strong>基本素材精灵图生成</strong>
-          <p class="muted">选择/新建后端精灵图，按格子逐个生成像素素材，自动写入可用法 Tag。</p>
+          <p class="muted">选择/新建当前项目下的精灵图，按格子逐个生成像素素材，自动写入可用法 Tag。</p>
         </a>
         <a class="card" href="/walk.html" style="flex:1;min-width:240px;text-decoration:none;color:inherit">
           <strong>行走图生成</strong>
-          <p class="muted">生成 4 方向 × 3 帧的角色行走动画表。</p>
+          <p class="muted">生成并保存当前项目下的 4 方向 × 3 帧角色行走动画表。</p>
         </a>
       </div>
       <h2>开始</h2>
-      <p class="muted">先到 <a href="/config.html" style="color:var(--accent)">配置页</a> 填入 MINIMAX 的 API Key 并选择模型。</p>
+      <p class="muted">右上角可切换或新增项目；服务商 Key 仍在 <a href="/config.html" style="color:var(--accent)">配置页</a> 统一配置。</p>
     </div>
   </div>
+  <script src="/project.js"></script>
+  <script>Project.init({ requireProject: true });</script>
 </body>
 </html>
