@@ -47,8 +47,8 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
 
   if (kind === 'tile') {
     final +=
-      `Type: TILE. Seamless/repeating ground or material texture. Fill the full canvas with the texture. ` +
-      `No standalone centered object, no empty background, no white background, no border/frame/text. `;
+      `Type: TILE. Seamless/repeating ground or material texture. Fill the entire canvas edge-to-edge with the requested texture. ` +
+      `No standalone centered object, no empty background, no blank margin, no outline, no border/frame/text. `;
   } else {
     final +=
       `Type: STANDALONE SPRITE, not a tile. Draw exactly one large centered subject occupying 60-80% of canvas, readable at 32x32. ` +
