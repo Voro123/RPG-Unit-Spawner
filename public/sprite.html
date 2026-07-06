@@ -85,7 +85,7 @@
         <label style="margin:0"><input type="radio" name="assetKind" value="sprite" checked style="width:auto;margin-right:6px" />非地块（独立物体/道具/植物）</label>
         <label style="margin:0"><input type="radio" name="assetKind" value="tile" style="width:auto;margin-right:6px" />地块（铺满纹理/地面）</label>
       </div>
-      <p class="muted" style="margin-top:6px">非地块会生成单个主体并使用纯色背景，且不会自动套用首格参考图；地块会铺满整格并可自动沿用首格风格。</p>
+      <p class="muted" style="margin-top:6px">非地块会生成单个主体，并在保存前自动清理边框/地面，把背景替换为纯色 #FF00FF；地块会铺满整格并可自动沿用首格风格。</p>
 
       <label>参考图</label>
       <div class="row">
@@ -116,6 +116,7 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const SPRITE_BG = { r: 255, g: 0, b: 255 };
     let SHEET = null;
     let SEL = null;
     let REGION = null; // {c0,c1,r0,r1} 框选区域
@@ -309,6 +310,214 @@
       };
     });
 
+    function loadBase64Image(base64) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = 'data:image/png;base64,' + base64;
+      });
+    }
+
+    function addCluster(map, data, i) {
+      const key = `${data[i] >> 4},${data[i + 1] >> 4},${data[i + 2] >> 4}`;
+      let c = map.get(key);
+      if (!c) {
+        c = { count: 0, r: 0, g: 0, b: 0 };
+        map.set(key, c);
+      }
+      c.count += 1;
+      c.r += data[i];
+      c.g += data[i + 1];
+      c.b += data[i + 2];
+    }
+
+    function clusterToColor(c) {
+      return { r: c.r / c.count, g: c.g / c.count, b: c.b / c.count };
+    }
+
+    function buildBackgroundPalette(data, w, h) {
+      const all = new Map();
+      for (let i = 0; i < data.length; i += 4) addCluster(all, data, i);
+      const sortedAll = [...all.values()].sort((a, b) => b.count - a.count);
+      const palette = [];
+      let covered = 0;
+      const total = w * h;
+      for (const c of sortedAll) {
+        palette.push(clusterToColor(c));
+        covered += c.count;
+        if (palette.length >= 5 || covered / total >= 0.78) break;
+      }
+
+      const edge = new Map();
+      const addAt = (x, y) => addCluster(edge, data, (y * w + x) * 4);
+      for (let x = 0; x < w; x++) { addAt(x, 0); addAt(x, h - 1); }
+      for (let y = 0; y < h; y++) { addAt(0, y); addAt(w - 1, y); }
+      const sortedEdge = [...edge.values()].sort((a, b) => b.count - a.count).slice(0, 5);
+      for (const c of sortedEdge) palette.push(clusterToColor(c));
+      return palette;
+    }
+
+    function nearPalette(data, i, palette, thresholdSq) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      return palette.some((p) => {
+        const dr = r - p.r, dg = g - p.g, db = b - p.b;
+        return dr * dr + dg * dg + db * db <= thresholdSq;
+      });
+    }
+
+    function cleanStandaloneSpriteCanvas(canvas) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+      const palette = buildBackgroundPalette(data, w, h);
+      const bg = new Uint8Array(w * h);
+      const thresholdSq = 48 * 48;
+
+      for (let p = 0; p < w * h; p++) {
+        const i = p * 4;
+        if (data[i + 3] < 16 || nearPalette(data, i, palette, thresholdSq)) bg[p] = 1;
+      }
+
+      // 非地块主体应居中；把所有连接到画布边缘的残留边框/底图也视为背景。
+      const stack = [];
+      const markEdge = (x, y) => {
+        if (x < 0 || y < 0 || x >= w || y >= h) return;
+        const p = y * w + x;
+        if (bg[p]) return;
+        bg[p] = 1;
+        stack.push(p);
+      };
+      for (let x = 0; x < w; x++) { markEdge(x, 0); markEdge(x, h - 1); }
+      for (let y = 0; y < h; y++) { markEdge(0, y); markEdge(w - 1, y); }
+      while (stack.length) {
+        const p = stack.pop();
+        const x = p % w, y = Math.floor(p / w);
+        markEdge(x + 1, y); markEdge(x - 1, y); markEdge(x, y + 1); markEdge(x, y - 1);
+      }
+
+      // 去掉小噪点；保留主体及可能相连/邻近的小部件。
+      const seen = new Uint8Array(w * h);
+      const comps = [];
+      const dirs = [-1, 0, 1];
+      for (let p = 0; p < w * h; p++) {
+        if (bg[p] || seen[p]) continue;
+        const q = [p];
+        const pixels = [];
+        seen[p] = 1;
+        let minX = w, minY = h, maxX = 0, maxY = 0;
+        while (q.length) {
+          const cur = q.pop();
+          pixels.push(cur);
+          const x = cur % w, y = Math.floor(cur / w);
+          minX = Math.min(minX, x); minY = Math.min(minY, y);
+          maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+          for (const dy of dirs) {
+            for (const dx of dirs) {
+              if (!dx && !dy) continue;
+              const nx = x + dx, ny = y + dy;
+              if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+              const np = ny * w + nx;
+              if (bg[np] || seen[np]) continue;
+              seen[np] = 1;
+              q.push(np);
+            }
+          }
+        }
+        comps.push({ pixels, count: pixels.length, minX, minY, maxX, maxY });
+      }
+      if (comps.length) {
+        comps.sort((a, b) => b.count - a.count);
+        const largest = comps[0];
+        const minKeep = Math.max(2, Math.floor(largest.count * 0.18));
+        for (const comp of comps) {
+          const nearBorder = comp.minX <= 1 || comp.minY <= 1 || comp.maxX >= w - 2 || comp.maxY >= h - 2;
+          const keep = comp === largest || (!nearBorder && comp.count >= minKeep);
+          if (!keep) {
+            for (const p of comp.pixels) bg[p] = 1;
+          }
+        }
+      }
+
+      for (let p = 0; p < w * h; p++) {
+        if (!bg[p]) continue;
+        const i = p * 4;
+        data[i] = SPRITE_BG.r;
+        data[i + 1] = SPRITE_BG.g;
+        data[i + 2] = SPRITE_BG.b;
+        data[i + 3] = 255;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      fitForegroundToCanvas(canvas);
+    }
+
+    function fitForegroundToCanvas(canvas) {
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+      let minX = w, minY = h, maxX = -1, maxY = -1;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const isBg = data[i] === SPRITE_BG.r && data[i + 1] === SPRITE_BG.g && data[i + 2] === SPRITE_BG.b;
+          if (!isBg) {
+            minX = Math.min(minX, x); minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+          }
+        }
+      }
+      if (maxX < minX || maxY < minY) return;
+
+      const bw = maxX - minX + 1, bh = maxY - minY + 1;
+      const margin = Math.max(1, Math.floor(Math.min(w, h) * 0.08));
+      const scale = Math.min((w - margin * 2) / bw, (h - margin * 2) / bh);
+      const dw = Math.max(1, Math.round(bw * scale));
+      const dh = Math.max(1, Math.round(bh * scale));
+      const dx = Math.floor((w - dw) / 2);
+      const dy = Math.floor((h - dh) / 2);
+
+      const tmp = document.createElement('canvas');
+      tmp.width = w; tmp.height = h;
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = false;
+      tctx.fillStyle = '#ff00ff';
+      tctx.fillRect(0, 0, w, h);
+      tctx.drawImage(canvas, minX, minY, bw, bh, dx, dy, dw, dh);
+      ctx.clearRect(0, 0, w, h);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tmp, 0, 0);
+    }
+
+    async function generateStandaloneSpriteCell(prompt, reference, seed) {
+      const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, reference, seed, width: 512, height: 512, assetKind: 'sprite' }),
+      });
+      const j = await r.json();
+      if (!j.image) throw new Error(j.error || '无图');
+
+      const img = await loadBase64Image(j.image);
+      const cv = document.createElement('canvas');
+      cv.width = SHEET.cellSize;
+      cv.height = SHEET.cellSize;
+      const ctx = cv.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, 0, 0, cv.width, cv.height);
+      cleanStandaloneSpriteCanvas(cv);
+
+      const save = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/image`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: cv.toDataURL('image/png').split(',')[1], tag: `非地块：${prompt}` }),
+      });
+      const saved = await save.json();
+      if (!saved.ok) throw new Error(saved.error || '保存失败');
+      return saved.meta;
+    }
+
     // 框选结束：拖动结束且未移动则为单击（REGION 置空）
     document.addEventListener('mouseup', () => {
       if (!dragging) return;
@@ -322,22 +531,32 @@
       if (SEL === null) { $('opStatus').textContent = '请先选择一个格子'; return; }
       const prompt = $('prompt').value.trim();
       if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; }
-      $('opStatus').textContent = '生成中…';
       const reference = await resolveReference();
       const seed = $('seed').value ? Number($('seed').value) : undefined;
       const assetKind = currentAssetKind();
-      const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/${mode === 'replace' ? 'replace' : 'generate'}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, reference, seed, assetKind }),
-      });
-      const j = await r.json();
-      if (!j.ok) { $('opStatus').textContent = '失败：' + (j.error || ''); return; }
-      SHEET = j.meta;
+      $('opStatus').textContent = assetKind === 'sprite' ? '生成中…（完成后会自动清理背景）' : '生成中…';
+      try {
+        if (assetKind === 'sprite') {
+          SHEET = await generateStandaloneSpriteCell(prompt, reference, seed);
+        } else {
+          const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/${mode === 'replace' ? 'replace' : 'generate'}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt, reference, seed, assetKind }),
+          });
+          const j = await r.json();
+          if (!j.ok) throw new Error(j.error || '');
+          SHEET = j.meta;
+        }
+      } catch (e) {
+        $('opStatus').textContent = '失败：' + (e.message || e);
+        return;
+      }
+
       renderGrid();
       const cell = SHEET.cells.find((c) => c.index === SEL);
       $('tagEdit').value = cell.tag || '';
-      $('opStatus').textContent = '完成 ✓ 已自动写入 Tag';
+      $('opStatus').textContent = assetKind === 'sprite' ? '完成 ✓ 已清理为纯色背景并写入 Tag' : '完成 ✓ 已自动写入 Tag';
       // 自动跳到下一个空位
       const next = SHEET.cells.find((c) => !c.imageRef);
       if (next) selectCell(next.index);
@@ -363,10 +582,10 @@
       const W = C * cs, H = R * cs;
       const prompt = $('prompt').value.trim();
       if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; }
-      $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`;
       const reference = await resolveReference();
       const seed = $('seed').value ? Number($('seed').value) : undefined;
       const assetKind = currentAssetKind();
+      $('opStatus').textContent = assetKind === 'sprite' ? `生成大图 (${C}×${R}) 中…完成后会自动清理背景` : `生成大图 (${C}×${R}) 中…`;
       const { w, h } = chooseSize(W, H);
       const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, {
         method: 'POST',
@@ -383,6 +602,7 @@
       const bctx = big.getContext('2d');
       bctx.imageSmoothingEnabled = false;
       bctx.drawImage(img, 0, 0, W, H);
+      if (assetKind === 'sprite') cleanStandaloneSpriteCanvas(big);
       for (const cell of regionCells()) {
         const cc = document.createElement('canvas');
         cc.width = cs; cc.height = cs;
