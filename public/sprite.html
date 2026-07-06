@@ -352,7 +352,7 @@
       if (w < 512) { const s = 512 / w; w = 512; h = Math.round(h * s); }
       if (h < 512) { const s = 512 / h; h = 512; w = Math.round(w * s); }
       if (w > 2048) { const s = 2048 / w; w = 2048; h = Math.round(h * s); }
-      if (h > 2048) { const s = 2048 / h; h = 2048; w = Math.round(h * s); }
+      if (h > 2048) { const s = 2048 / h; h = 2048; w = Math.round(w * s); }
       return { w: Math.round(w / 8) * 8, h: Math.round(h / 8) * 8 };
     }
 
