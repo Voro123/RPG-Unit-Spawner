@@ -2,6 +2,7 @@
   const KEY = 'rpg-unit-spawner.projectId';
   let currentProjectId = '';
   let projectsCache = [];
+  let activeGeneration = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -15,10 +16,11 @@
   async function api(url, opt = {}) {
     const method = (opt.method || 'GET').toUpperCase();
     const headers = { ...(opt.headers || {}) };
+    const signal = opt.signal || activeGeneration?.controller?.signal;
     if (currentProjectId) headers['x-project-id'] = currentProjectId;
 
     if (method === 'GET' || method === 'HEAD') {
-      return fetch(withProject(url), { ...opt, headers });
+      return fetch(withProject(url), { ...opt, headers, signal });
     }
 
     let body = opt.body;
@@ -29,7 +31,7 @@
       } catch { /* keep body */ }
     }
 
-    return fetch(url, { ...opt, headers, body });
+    return fetch(url, { ...opt, headers, body, signal });
   }
 
   function injectStyle() {
@@ -159,6 +161,58 @@
     sync();
   }
 
+  function isAbortError(e) {
+    return e && (e.name === 'AbortError' || e.code === DOMException.ABORT_ERR);
+  }
+
+  function installCancelableGenerationButtons() {
+    const candidates = [
+      { id: 'genBtn', label: '取消生成' },
+      { id: 'replaceBtn', label: '取消生成' },
+    ];
+    const buttons = candidates.map((c) => ({ ...c, el: $(c.id) })).filter((c) => c.el && c.el.onclick && !c.el.dataset.cancelWrapped);
+    if (!buttons.length) return;
+    const status = $('opStatus') || $('status');
+
+    for (const item of buttons) {
+      const btn = item.el;
+      const originalClick = btn.onclick;
+      const originalText = btn.textContent;
+      btn.dataset.cancelWrapped = '1';
+
+      btn.onclick = async (event) => {
+        if (activeGeneration) {
+          activeGeneration.controller.abort();
+          if (status) status.textContent = '正在取消生成…';
+          return;
+        }
+
+        const controller = new AbortController();
+        activeGeneration = { controller, button: btn };
+        btn.textContent = item.label;
+        for (const other of buttons) {
+          if (other.el !== btn) other.el.disabled = true;
+        }
+
+        try {
+          await originalClick.call(btn, event);
+        } catch (e) {
+          if (isAbortError(e)) {
+            if (status) status.textContent = '已取消生成';
+          } else {
+            throw e;
+          }
+        } finally {
+          if (activeGeneration?.controller === controller) {
+            activeGeneration = null;
+          }
+          btn.textContent = originalText;
+          for (const other of buttons) other.el.disabled = false;
+        }
+      };
+    }
+  }
+
   async function init({ requireProject = true } = {}) {
     injectStyle();
     const list = await loadProjects();
@@ -173,7 +227,10 @@
     return currentProjectId;
   }
 
-  document.addEventListener('DOMContentLoaded', installSpriteBackgroundKindGuard);
+  document.addEventListener('DOMContentLoaded', () => {
+    installSpriteBackgroundKindGuard();
+    installCancelableGenerationButtons();
+  });
 
   window.Project = {
     init,
