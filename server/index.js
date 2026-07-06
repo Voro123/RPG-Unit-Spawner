@@ -41,33 +41,30 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const rawSubject = clipText(promptText);
   const subject = kind === 'sprite' ? expandSpriteSubject(rawSubject) : rawSubject;
 
+  if (kind === 'tile') {
+    let final =
+      `Seamless pixel-art terrain/material texture tile for a 2D RPG. Material: ${subject}. ` +
+      `This is a texture swatch only, not a map scene. Flat colors, visible square pixels, no blur, no gradients, no photorealism. ` +
+      `Fill the entire canvas uniformly edge-to-edge with one continuous repeating material. ` +
+      `All four edges and corners must look like the middle of the texture; no edge frame, no corner decoration, no vignette. ` +
+      `No objects or clutter: no bushes, vines, cliffs, walls, stones, rocks, flowers, items, props, paths, shadows, characters, text, UI, border, frame, outline, or blank margin. ` +
+      `Only tiny color/noise variation that belongs to the requested material is allowed. `;
+    if (ref) final += `Reference is style/palette only; ignore its objects, scene layout, edges, corners, border, frame, and clutter. `;
+    final += `Final: one clean full-canvas seamless ${rawSubject} texture tile with no extra objects.`;
+    return capPrompt(final);
+  }
+
   let final =
     `Pixel art for 2D top-down RPG. Subject: ${subject}. ` +
-    `Flat colors, visible square pixels, no blur, no gradients, no photorealism. `;
+    `Flat colors, visible square pixels, no blur, no gradients, no photorealism. ` +
+    `Type: STANDALONE SPRITE, not a tile. Draw exactly one large centered subject occupying 60-80% of canvas, readable at 32x32. ` +
+    `Subject must have visible colored details; never output blank background only. ` +
+    `For flowers/plants: visible petals, center, stem, leaves. ` +
+    `No ground, dirt, grass patch, floor tile, shadow, base, platform, border, frame, full-canvas texture, text. ` +
+    `Plain solid white background ${BG_COLOR}. Drawing the subject is more important than perfect background. `;
 
-  if (kind === 'tile') {
-    final +=
-      `Type: TILE. Seamless/repeating ground or material texture. Fill the entire canvas edge-to-edge with the requested texture. ` +
-      `No standalone centered object, no empty background, no blank margin, no outline, no border/frame/text. `;
-  } else {
-    final +=
-      `Type: STANDALONE SPRITE, not a tile. Draw exactly one large centered subject occupying 60-80% of canvas, readable at 32x32. ` +
-      `Subject must have visible colored details; never output blank background only. ` +
-      `For flowers/plants: visible petals, center, stem, leaves. ` +
-      `No ground, dirt, grass patch, floor tile, shadow, base, platform, border, frame, full-canvas texture, text. ` +
-      `Plain solid white background ${BG_COLOR}. Drawing the subject is more important than perfect background. `;
-  }
-
-  if (ref) {
-    final += kind === 'tile'
-      ? `Reference is style/palette only; requested tile rules win. `
-      : `Reference is style/palette only; do not copy its subject, layout, background, border, ground, or texture. `;
-  }
-
-  final += kind === 'sprite'
-    ? `Final: one large visible ${rawSubject} sprite centered on white background.`
-    : `Final: one full-canvas ${rawSubject} tile texture.`;
-
+  if (ref) final += `Reference is style/palette only; do not copy its subject, layout, background, border, ground, or texture. `;
+  final += `Final: one large visible ${rawSubject} sprite centered on white background.`;
   return capPrompt(final);
 }
 
