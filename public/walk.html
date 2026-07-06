@@ -18,26 +18,31 @@
     <div id="cfgWarn" class="card err" style="display:none">未配置 MINIMAX，请先到 <a href="/config.html" style="color:var(--accent)">配置页</a> 填写 API Key。</div>
 
     <div class="card">
-      <p class="muted">基础版：通过提示词生成角色行走图。默认产出一张含多方向/多帧的像素行走表，可下载后按网格切片使用。</p>
+      <p class="muted">生成并保存到当前项目。参考图默认使用当前项目下第一张行走图，方便保持角色风格一致。</p>
 
       <label>角色描述</label>
-      <textarea id="prompt" placeholder="如：像素风勇士，蓝衣，4 方向（下/左/右/上）各 3 帧行走动画，等距网格排列，透明背景"></textarea>
+      <textarea id="prompt" placeholder="如：像素风勇士，蓝衣，棕色短发，小披风"></textarea>
 
       <div class="row">
-        <div style="flex:1"><label>方向数</label>
-          <select id="dirs"><option>4</option><option>8</option></select></div>
-        <div style="flex:1"><label>每方向帧数</label>
-          <select id="frames"><option>3</option><option>4</option></select></div>
-        <div style="flex:1"><label>单帧像素</label>
-          <input id="cell" type="number" value="32" min="8" /></div>
+        <div style="flex:1"><label>方向数</label><select id="dirs"><option>4</option><option>8</option></select></div>
+        <div style="flex:1"><label>每方向帧数</label><select id="frames"><option>3</option><option>4</option></select></div>
+        <div style="flex:1"><label>单帧像素</label><input id="cell" type="number" value="32" min="8" /></div>
       </div>
+
+      <label>参考图</label>
+      <div class="row">
+        <label style="margin:0"><input type="radio" name="ref" value="auto" checked style="width:auto;margin-right:6px" />自动（当前项目第一张行走图）</label>
+        <label style="margin:0"><input type="radio" name="ref" value="upload" style="width:auto;margin-right:6px" />上传</label>
+        <label style="margin:0"><input type="radio" name="ref" value="existing" style="width:auto;margin-right:6px" />选当前项目行走图</label>
+        <label style="margin:0"><input type="radio" name="ref" value="none" style="width:auto;margin-right:6px" />无</label>
+      </div>
+      <input id="refUpload" type="file" accept="image/*" style="display:none;margin-top:8px" />
+      <div id="walkPick" class="row" style="display:none;margin-top:8px"></div>
 
       <label>随机种子（可选）</label>
       <input id="seed" type="number" placeholder="如：12345" />
 
-      <div class="row" style="margin-top:12px">
-        <button id="genBtn">生成行走图</button>
-      </div>
+      <div class="row" style="margin-top:12px"><button id="genBtn">生成行走图</button><button class="ghost" id="refreshWalks">刷新行走图库</button></div>
       <div id="status" class="muted" style="margin-top:8px"></div>
     </div>
 
@@ -45,31 +50,111 @@
       <h2 style="margin-top:0">结果</h2>
       <div id="results" class="row"></div>
     </div>
+
+    <div class="card">
+      <h2 style="margin-top:0">当前项目行走图库</h2>
+      <div id="walkList" class="row"></div>
+    </div>
   </div>
 
+  <script src="/project.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
+    let WALKS = [];
+    let REF = null;
+
+    function api(url, opt) { return Project.fetch(url, opt); }
+    function walkImageUrl(id) { return Project.withProject(`/api/walks/${id}/image?t=${Date.now()}`); }
+
+    async function dataUrlFromFile(file) {
+      return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
+    }
+    async function dataUrlFromUrl(url) {
+      const blob = await (await fetch(url)).blob();
+      return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); });
+    }
+
+    async function loadWalks() {
+      const list = await (await api('/api/walks')).json();
+      WALKS = Array.isArray(list) ? list : [];
+      renderWalkList();
+      if (document.querySelector('input[name=ref]:checked')?.value === 'existing') renderWalkPick();
+    }
+
+    function renderWalkCard(w, pickable = false) {
+      const url = walkImageUrl(w.id);
+      return `<div class="card" style="width:180px;padding:10px">
+        <img src="${url}" data-id="${w.id}" style="width:160px;height:160px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;${pickable ? 'cursor:pointer' : ''}">
+        <div class="muted" style="font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${w.prompt || w.name}">${w.name || w.prompt || w.id}</div>
+      </div>`;
+    }
+
+    function renderWalkList() {
+      $('walkList').innerHTML = WALKS.length ? WALKS.map((w) => renderWalkCard(w)).join('') : '<span class="muted">当前项目暂无行走图。</span>';
+    }
+
+    function renderWalkPick() {
+      const box = $('walkPick');
+      box.innerHTML = WALKS.length ? WALKS.map((w) => renderWalkCard(w, true)).join('') : '<span class="muted">当前项目暂无可选行走图。</span>';
+      box.querySelectorAll('img').forEach((img) => {
+        img.onclick = async () => {
+          REF = await dataUrlFromUrl(img.src);
+          box.querySelectorAll('img').forEach((x) => (x.style.borderColor = 'var(--border)'));
+          img.style.borderColor = 'var(--accent)';
+        };
+      });
+    }
+
+    document.querySelectorAll('input[name=ref]').forEach((r) => {
+      r.onchange = () => {
+        const mode = document.querySelector('input[name=ref]:checked').value;
+        $('refUpload').style.display = mode === 'upload' ? 'block' : 'none';
+        $('walkPick').style.display = mode === 'existing' ? 'flex' : 'none';
+        if (mode === 'existing') renderWalkPick();
+      };
+    });
+
+    async function resolveReference() {
+      const mode = document.querySelector('input[name=ref]:checked').value;
+      if (mode === 'upload') {
+        const f = $('refUpload').files[0];
+        return f ? await dataUrlFromFile(f) : null;
+      }
+      if (mode === 'existing') return REF;
+      if (mode === 'none') return false;
+      return null; // auto -> backend uses current project's first walk image
+    }
 
     async function gen() {
-      const base = $('prompt').value.trim();
-      if (!base) { $('status').textContent = '请填写角色描述'; return; }
-      const prompt = `${base}。方向数 ${$('dirs').value}，每方向 ${$('frames').value} 帧，单帧约 ${$('cell').value}px，像素艺术，等距网格，透明背景。`;
+      const prompt = $('prompt').value.trim();
+      if (!prompt) { $('status').textContent = '请填写角色描述'; return; }
       const seed = $('seed').value ? Number($('seed').value) : undefined;
+      const dirs = Number($('dirs').value);
+      const frames = Number($('frames').value);
+      const cellSize = Number($('cell').value);
+      const reference = await resolveReference();
       $('status').textContent = '生成中…';
-      const r = await fetch('/api/generate', {
+      const r = await api('/api/walks/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, seed, n: 1 }),
+        body: JSON.stringify({ prompt, reference, seed, dirs, frames, cellSize }),
       });
       const j = await r.json();
-      if (!j.images) { $('status').textContent = '失败：' + (j.error || ''); return; }
-      $('results').innerHTML = j.images.map((b) => `<img src="data:image/png;base64,${b}" style="width:256px;height:256px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px">`).join('');
-      $('status').textContent = '完成 ✓';
+      if (!j.ok) { $('status').textContent = '失败：' + (j.error || ''); return; }
+      const url = walkImageUrl(j.meta.id);
+      $('results').innerHTML = `<img src="${url}" style="width:256px;height:256px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px">`;
+      $('status').textContent = '完成 ✓ 已保存到当前项目行走图库';
+      await loadWalks();
     }
+
     $('genBtn').onclick = gen;
+    $('refreshWalks').onclick = loadWalks;
 
     (async () => {
+      const pid = await Project.init({ requireProject: true });
+      if (!pid) return;
       const c = await (await fetch('/api/config')).json();
       if (!c.hasKey) $('cfgWarn').style.display = 'block';
+      await loadWalks();
     })();
   </script>
 </body>
