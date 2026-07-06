@@ -66,7 +66,7 @@
         <span class="muted" id="sheetMeta"></span>
       </div>
       <div id="grid" class="grid" style="margin-top:12px"></div>
-      <div class="muted" style="margin-top:8px;font-size:13px">提示：在格子上按住拖动可框选一片区域，再用「生成/替换」会把一张大图切片铺满该区域（适合跨格大树等）。</div>
+      <div class="muted" style="margin-top:8px;font-size:13px">提示：在格子上按住拖动可框选一片区域，再用「生成/替换」会把一张大图切片铺满该区域；地块适合铺满纹理，非地块适合大树、花朵、箱子等独立物体。</div>
       <div id="hoverPreview" class="hover-preview"></div>
       <div class="row" style="margin-top:10px">
         <button class="ghost" id="exportBtn">导出素材包 (PNG + meta + SKILL)</button>
@@ -78,11 +78,18 @@
       <h2 style="margin-top:0">操作格：<span id="selInfo" class="badge">未选</span></h2>
 
       <label>提示词（描述要生成的素材）</label>
-      <textarea id="prompt" placeholder="如：木宝箱，棕色木质，金属包边，像素风，透明背景"></textarea>
+      <textarea id="prompt" placeholder="如：小花，红色花瓣，绿色叶子，像素风"></textarea>
+
+      <label>生成类型</label>
+      <div class="row">
+        <label style="margin:0"><input type="radio" name="assetKind" value="sprite" checked style="width:auto;margin-right:6px" />非地块（独立物体/道具/植物）</label>
+        <label style="margin:0"><input type="radio" name="assetKind" value="tile" style="width:auto;margin-right:6px" />地块（铺满纹理/地面）</label>
+      </div>
+      <p class="muted" style="margin-top:6px">非地块会生成单个主体并使用纯色背景，且不会自动套用首格参考图；地块会铺满整格并可自动沿用首格风格。</p>
 
       <label>参考图</label>
       <div class="row">
-        <label style="margin:0"><input type="radio" name="ref" value="auto" checked style="width:auto;margin-right:6px" />自动（默认当前图首格 → 其他图首格）</label>
+        <label style="margin:0"><input type="radio" name="ref" value="auto" checked style="width:auto;margin-right:6px" />自动（地块默认当前图首格 → 其他图首格；非地块不自动套首格）</label>
         <label style="margin:0"><input type="radio" name="ref" value="upload" style="width:auto;margin-right:6px" />上传</label>
         <label style="margin:0"><input type="radio" name="ref" value="sub" style="width:auto;margin-right:6px" />选本图子图</label>
         <label style="margin:0"><input type="radio" name="ref" value="none" style="width:auto;margin-right:6px" />无</label>
@@ -263,6 +270,10 @@
       return document.querySelector('input[name=ref]:checked').value;
     }
 
+    function currentAssetKind() {
+      return document.querySelector('input[name=assetKind]:checked').value;
+    }
+
     async function resolveReference() {
       const mode = currentRefMode();
       if (mode === 'upload') {
@@ -272,7 +283,7 @@
       }
       if (mode === 'sub') return REF; // chosen from subPick
       if (mode === 'none') return false; // 显式无参考图
-      return null; // auto -> backend decides
+      return null; // auto -> backend decides by assetKind
     }
 
     function renderSubPick() {
@@ -314,10 +325,11 @@
       $('opStatus').textContent = '生成中…';
       const reference = await resolveReference();
       const seed = $('seed').value ? Number($('seed').value) : undefined;
+      const assetKind = currentAssetKind();
       const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/${mode === 'replace' ? 'replace' : 'generate'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, reference, seed }),
+        body: JSON.stringify({ prompt, reference, seed, assetKind }),
       });
       const j = await r.json();
       if (!j.ok) { $('opStatus').textContent = '失败：' + (j.error || ''); return; }
@@ -337,7 +349,6 @@
       const ratio = W / H;
       let w = ratio >= 1 ? longSide : Math.round(longSide * ratio);
       let h = ratio >= 1 ? Math.round(longSide / ratio) : longSide;
-      const clamp = (v) => Math.max(512, Math.min(2048, v));
       if (w < 512) { const s = 512 / w; w = 512; h = Math.round(h * s); }
       if (h < 512) { const s = 512 / h; h = 512; w = Math.round(w * s); }
       if (w > 2048) { const s = 2048 / w; w = 2048; h = Math.round(h * s); }
@@ -355,11 +366,12 @@
       $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`;
       const reference = await resolveReference();
       const seed = $('seed').value ? Number($('seed').value) : undefined;
+      const assetKind = currentAssetKind();
       const { w, h } = chooseSize(W, H);
       const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, reference, seed, width: w, height: h }),
+        body: JSON.stringify({ prompt, reference, seed, width: w, height: h, assetKind }),
       });
       const j = await r.json();
       if (!j.image) { $('opStatus').textContent = '失败：' + (j.error || '无图'); return; }
@@ -383,7 +395,7 @@
         await api(`/api/sprites/${SHEET.id}/cells/${cell.index}/image`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ image: b64, tag: prompt }),
+          body: JSON.stringify({ image: b64, tag: `${assetKind === 'tile' ? '地块' : '非地块'}：${prompt}` }),
         });
       }
       SHEET = await (await api('/api/sprites/' + SHEET.id)).json();
