@@ -24,7 +24,7 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
     `Pixel art asset for a 2D top-down RPG game. Subject: [${subject}]. ` +
     `STRICT rules — flat colors only, visible square pixels, no smoothing/AA/blur/gradients/photorealism. ` +
     `Draw ONLY what is explicitly described in the subject above. ` +
-    `Do NOT spontaneously add any unrequested objects, decorations, scenery, borders, frames, edges, vignettes, text, logos, or UI elements. `;
+    `Do NOT spontaneously add any unrequested objects, decorations, scenery, borders, frames, edges, vignettes, text, logos, UI elements, checkerboards, or mockup backgrounds. `;
 
   let final = common;
   if (kind === 'tile') {
@@ -37,10 +37,14 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   } else {
     final +=
       `Asset type: NON-TILE STANDALONE SPRITE. ` +
-      `The output MUST be exactly one standalone centered object/prop/item/plant/character described by the subject. ` +
-      `Do NOT make a repeating tile, do NOT fill the canvas with texture, and do NOT copy any terrain/tile layout. ` +
-      `Leave clear empty space around the subject where possible. ` +
-      `The background MUST be one single solid flat pure color (${BG_COLOR}), with NO transparency and NO gradients; only the requested subject appears on that background. `;
+      `Create EXACTLY ONE standalone subject, centered in the image. ` +
+      `For flowers/plants/items/props, draw ONLY that one subject itself. ` +
+      `Do NOT draw ground, dirt, grass patches, tile floors, beige paper, shadows, bases, platforms, frames, outlines around the canvas, or any full-canvas texture. ` +
+      `Do NOT make a repeating tile and do NOT fill the canvas with decorative texture. ` +
+      `Leave clear empty space around the subject. ` +
+      `The background must be a perfectly uniform chroma key color: RGB(255,0,255), hex ${BG_COLOR}. ` +
+      `Every background pixel must be exactly ${BG_COLOR}; no transparency, no off-white, no beige, no checkerboard, no gradient. ` +
+      `Only the requested subject may use non-magenta colors. `;
   }
 
   if (ref) {
@@ -51,8 +55,8 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
     } else {
       final +=
         `Use the provided reference image ONLY for pixel-art style and color palette. ` +
-        `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, or background. ` +
-        `The requested subject must remain a standalone non-tile sprite on the solid ${BG_COLOR} background. `;
+        `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, border, frame, shadow, ground, or background. ` +
+        `The requested subject must remain one standalone non-tile sprite on the solid ${BG_COLOR} background. `;
     }
   }
 
