@@ -16,7 +16,7 @@
   <div class="container">
     <h1>服务商配置</h1>
     <div class="card">
-      <p class="muted">当前仅支持 <strong>MINIMAX</strong>。API Key 仅保存在服务端（data/config.json，已 gitignore），不会下发到前端。</p>
+      <p class="muted">当前仅支持 <strong>MINIMAX</strong>。API Key 仅保存在服务端（data/config.json，已 gitignore），不会下发到前端。项目数据互相隔离，但服务商配置全局共享。</p>
 
       <label>服务商</label>
       <input value="MINIMAX" disabled />
@@ -42,6 +42,7 @@
     </div>
   </div>
 
+  <script src="/project.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
 
@@ -74,7 +75,6 @@
     };
 
     $('test').onclick = async () => {
-      // 先保存当前填写（含区域），再测试
       const api_key = $('apiKey').value.trim();
       const model = $('model').value;
       const base_url = $('baseUrl').value;
@@ -91,7 +91,7 @@
       load();
     };
 
-    load();
+    (async () => { await Project.init({ requireProject: true }); await load(); })();
   </script>
 </body>
 </html>
