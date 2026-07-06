@@ -42,7 +42,7 @@
     <div class="card">
       <div class="row" style="justify-content:space-between"><strong id="sheetTitle">—</strong><span class="muted" id="sheetMeta"></span></div>
       <div id="grid" class="grid" style="margin-top:12px"></div>
-      <div class="muted" style="margin-top:8px;font-size:13px">当前项目内数据隔离。拖动格子可框选区域；地块适合铺满纹理，非地块适合大树、花朵、箱子等独立物体。</div>
+      <div class="muted" style="margin-top:8px;font-size:13px">当前项目内数据隔离。拖动格子可框选区域；区域生成会按左上到右下给 tag 编号，例如 大树(1/4)。</div>
       <div id="hoverPreview" class="hover-preview"></div>
       <div class="row" style="margin-top:10px">
         <button class="ghost" id="exportBtn">导出素材包 (PNG + meta + SKILL)</button>
@@ -94,11 +94,19 @@
 
     function cellUrl(id, index) { return Project.withProject(`/api/sprites/${id}/cells/${index}?t=${Date.now()}`); }
     function api(url, opt) { return Project.fetch(url, opt); }
+    function assetKindLabel(kind) { return kind === 'tile' ? '地块' : '非地块'; }
+    function buildAssetTag(kind, prompt, part, total) {
+      const suffix = total && total > 1 ? `(${part}/${total})` : '';
+      return `${assetKindLabel(kind)}：${prompt}${suffix}`;
+    }
 
     function showPreview(index, e) {
       const cell = SHEET.cells.find((c) => c.index === index);
       if (!cell.imageRef) return;
-      const pv = $('hoverPreview'); pv.innerHTML = `<img src="${cellUrl(SHEET.id, index)}" alt="">`; pv.style.display = 'block'; movePreview(e);
+      const pv = $('hoverPreview');
+      pv.innerHTML = `<img src="${cellUrl(SHEET.id, index)}" alt="">`;
+      pv.style.display = 'block';
+      movePreview(e);
     }
     function movePreview(e) {
       const pv = $('hoverPreview'); if (pv.style.display === 'none') return;
@@ -135,7 +143,7 @@
     }
     function applyHighlights() { if (!SHEET) return; document.querySelectorAll('#grid .cell').forEach((el) => { const i = Number(el.dataset.i); const cell = SHEET.cells.find((c) => c.index === i); el.classList.toggle('selected', i === SEL); el.classList.toggle('region', !!(REGION && cell.col >= REGION.c0 && cell.col <= REGION.c1 && cell.row >= REGION.r0 && cell.row <= REGION.r1)); }); }
     function setRegion(a, b) { const ca = SHEET.cells.find((c) => c.index === a), cb = SHEET.cells.find((c) => c.index === b); REGION = { c0: Math.min(ca.col, cb.col), c1: Math.max(ca.col, cb.col), r0: Math.min(ca.row, cb.row), r1: Math.max(ca.row, cb.row) }; }
-    function regionCells() { return REGION ? SHEET.cells.filter((c) => c.col >= REGION.c0 && c.col <= REGION.c1 && c.row >= REGION.r0 && c.row <= REGION.r1) : []; }
+    function regionCells() { return REGION ? SHEET.cells.filter((c) => c.col >= REGION.c0 && c.col <= REGION.c1 && c.row >= REGION.r0 && c.row <= REGION.r1).sort((a, b) => (a.row - b.row) || (a.col - b.col)) : []; }
     function updateSelInfo() { if (REGION) { const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; $('selInfo').textContent = `区域 ${C}×${R}（${C * R} 格）`; } else if (SEL !== null && SHEET) { const c = SHEET.cells.find((x) => x.index === SEL); $('selInfo').textContent = `格子 ${SEL} (${c.col},${c.row})`; } else $('selInfo').textContent = '未选'; }
     function selectCell(i) { if (i === null || i === undefined) return; SEL = i; REGION = null; renderGrid(); const cell = SHEET.cells.find((c) => c.index === i); $('selInfo').textContent = `格子 ${i} (${cell.col},${cell.row})`; $('tagEdit').value = cell.tag || ''; }
 
@@ -162,12 +170,12 @@
       const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/${mode === 'replace' ? 'replace' : 'generate'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, assetKind }) });
       const j = await r.json(); if (!j.ok) { $('opStatus').textContent = '失败：' + (j.error || ''); return; }
       SHEET = j.meta; const cell = SHEET.cells.find((c) => c.index === SEL);
-      if (assetKind === 'sprite' && shouldRemoveBg()) { $('opStatus').textContent = '生成完成，正在边缘底色转透明…'; try { SHEET = await makeCellBgTransparent(SEL, cell.tag || `非地块：${prompt}`); } catch (e) { $('opStatus').textContent = '生成完成，但底色转透明失败：' + (e.message || e); renderGrid(); return; } }
+      if (assetKind === 'sprite' && shouldRemoveBg()) { $('opStatus').textContent = '生成完成，正在边缘底色转透明…'; try { SHEET = await makeCellBgTransparent(SEL, cell.tag || buildAssetTag(assetKind, prompt)); } catch (e) { $('opStatus').textContent = '生成完成，但底色转透明失败：' + (e.message || e); renderGrid(); return; } }
       renderGrid(); const updatedCell = SHEET.cells.find((c) => c.index === SEL); $('tagEdit').value = updatedCell.tag || ''; $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? '完成 ✓ 已边缘底色转透明并写入 Tag' : '完成 ✓ 已自动写入 Tag'; const next = SHEET.cells.find((c) => !c.imageRef); if (next) selectCell(next.index);
     }
 
     function chooseSize(W, H) { const longSide = 1024; const ratio = W / H; let w = ratio >= 1 ? longSide : Math.round(longSide * ratio); let h = ratio >= 1 ? Math.round(longSide / ratio) : longSide; if (w < 512) { const s = 512 / w; w = 512; h = Math.round(h * s); } if (h < 512) { const s = 512 / h; h = 512; w = Math.round(w * s); } if (w > 2048) { const s = 2048 / w; w = 2048; h = Math.round(h * s); } if (h > 2048) { const s = 2048 / h; h = 2048; w = Math.round(w * s); } return { w: Math.round(w / 8) * 8, h: Math.round(h / 8) * 8 }; }
-    async function generateRegion() { const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; const cs = SHEET.cellSize; const W = C * cs, H = R * cs; const prompt = $('prompt').value.trim(); if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; } $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`; const reference = await resolveReference(); const seed = $('seed').value ? Number($('seed').value) : undefined; const assetKind = currentAssetKind(); const { w, h } = chooseSize(W, H); const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, width: w, height: h, assetKind }) }); const j = await r.json(); if (!j.image) { $('opStatus').textContent = '失败：' + (j.error || '无图'); return; } const img = new Image(); img.src = 'data:image/png;base64,' + j.image; await img.decode(); const big = document.createElement('canvas'); big.width = W; big.height = H; const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = false; bctx.drawImage(img, 0, 0, W, H); if (assetKind === 'sprite' && shouldRemoveBg()) edgeColorToTransparent(big, selectedBgColor()); for (const cell of regionCells()) { const cc = document.createElement('canvas'); cc.width = cs; cc.height = cs; const cctx = cc.getContext('2d'); cctx.imageSmoothingEnabled = false; const sx = (cell.col - REGION.c0) * cs; const sy = (cell.row - REGION.r0) * cs; cctx.drawImage(big, sx, sy, cs, cs, 0, 0, cs, cs); await api(`/api/sprites/${SHEET.id}/cells/${cell.index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: cc.toDataURL('image/png').split(',')[1], tag: `${assetKind === 'tile' ? '地块' : '非地块'}：${prompt}` }) }); } SHEET = await (await api('/api/sprites/' + SHEET.id)).json(); REGION = null; renderGrid(); updateSelInfo(); $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? `完成 ✓ 已铺满 ${C}×${R} 区域并边缘底色转透明（${C * R} 格）` : `完成 ✓ 已铺满 ${C}×${R} 区域（${C * R} 格）`; }
+    async function generateRegion() { const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; const cs = SHEET.cellSize; const W = C * cs, H = R * cs; const prompt = $('prompt').value.trim(); if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; } $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`; const reference = await resolveReference(); const seed = $('seed').value ? Number($('seed').value) : undefined; const assetKind = currentAssetKind(); const { w, h } = chooseSize(W, H); const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, width: w, height: h, assetKind }) }); const j = await r.json(); if (!j.image) { $('opStatus').textContent = '失败：' + (j.error || '无图'); return; } const img = new Image(); img.src = 'data:image/png;base64,' + j.image; await img.decode(); const big = document.createElement('canvas'); big.width = W; big.height = H; const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = false; bctx.drawImage(img, 0, 0, W, H); if (assetKind === 'sprite' && shouldRemoveBg()) edgeColorToTransparent(big, selectedBgColor()); const cells = regionCells(); const total = cells.length; for (let n = 0; n < cells.length; n++) { const cell = cells[n]; const cc = document.createElement('canvas'); cc.width = cs; cc.height = cs; const cctx = cc.getContext('2d'); cctx.imageSmoothingEnabled = false; const sx = (cell.col - REGION.c0) * cs; const sy = (cell.row - REGION.r0) * cs; cctx.drawImage(big, sx, sy, cs, cs, 0, 0, cs, cs); await api(`/api/sprites/${SHEET.id}/cells/${cell.index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: cc.toDataURL('image/png').split(',')[1], tag: buildAssetTag(assetKind, prompt, n + 1, total) }) }); } SHEET = await (await api('/api/sprites/' + SHEET.id)).json(); REGION = null; renderGrid(); updateSelInfo(); $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? `完成 ✓ 已铺满 ${C}×${R} 区域、编号 Tag 并边缘底色转透明（${C * R} 格）` : `完成 ✓ 已铺满 ${C}×${R} 区域并编号 Tag（${C * R} 格）`; }
 
     $('genBtn').onclick = () => generate('generate'); $('replaceBtn').onclick = () => generate('replace');
     $('delBtn').onclick = async () => { const targets = REGION ? regionCells().map((c) => c.index) : (SEL !== null ? [SEL] : []); if (!targets.length) return; for (const i of targets) { const r = await api(`/api/sprites/${SHEET.id}/cells/${i}`, { method: 'DELETE' }); const j = await r.json(); if (j.ok) SHEET = j.meta; } REGION = null; renderGrid(); updateSelInfo(); $('tagEdit').value = ''; $('opStatus').textContent = '已删除'; };
