@@ -11,66 +11,64 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 
 // 非地块素材使用纯白背景，方便和主体区分，也便于后续去背。
 const BG_COLOR = '#FFFFFF';
+const MAX_MINIMAX_PROMPT_CHARS = 1400;
+const MAX_SUBJECT_CHARS = 260;
 
 function normalizeAssetKind(assetKind) {
   return assetKind === 'tile' ? 'tile' : 'sprite';
 }
 
+function clipText(text, maxLen = MAX_SUBJECT_CHARS) {
+  const s = String(text || '').trim().replace(/\s+/g, ' ');
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
 function expandSpriteSubject(subject) {
-  const s = subject.trim();
+  const s = clipText(subject);
   if (/^(花|花朵|小花|flower|flowers)$/i.test(s)) {
-    return `${s} — one clearly visible blooming flower with distinct petals, a center, a short stem, and two small leaves`;
+    return `${s}, one large blooming flower, clear petals, center, short stem, two leaves`;
   }
   return s;
 }
 
-// 像素风强制约束（全英文）。地块和非地块明确分流，避免独立素材被参考图/地块规则铺满。
+function capPrompt(prompt) {
+  return prompt.length > MAX_MINIMAX_PROMPT_CHARS ? prompt.slice(0, MAX_MINIMAX_PROMPT_CHARS) : prompt;
+}
+
+// 像素风强制约束（短模板）。MINIMAX prompt 必须 <1500 chars，所以这里强制压缩并截断。
 function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
-  const rawSubject = promptText.trim();
+  const rawSubject = clipText(promptText);
   const subject = kind === 'sprite' ? expandSpriteSubject(rawSubject) : rawSubject;
-  const common =
-    `Pixel art asset for a 2D top-down RPG game. Subject: [${subject}]. ` +
-    `STRICT rules — flat colors only, visible square pixels, no smoothing/AA/blur/gradients/photorealism. ` +
-    `Draw the requested subject clearly and do not replace it with background. ` +
-    `Do NOT spontaneously add any unrequested objects, scenery, borders, frames, edges, vignettes, text, logos, UI elements, checkerboards, or mockup backgrounds. `;
 
-  let final = common;
+  let final =
+    `Pixel art for 2D top-down RPG. Subject: ${subject}. ` +
+    `Flat colors, visible square pixels, no blur, no gradients, no photorealism. `;
+
   if (kind === 'tile') {
     final +=
-      `Asset type: TILE / GROUND TEXTURE. ` +
-      `The output MUST be a single seamless/repeating terrain tile texture. ` +
-      `Fill the ENTIRE image uniformly with the requested terrain/material texture. ` +
-      `Do NOT create a centered standalone object and do NOT leave empty background. ` +
-      `No plain white background; the terrain texture itself must cover the full canvas. `;
+      `Type: TILE. Seamless/repeating ground or material texture. Fill the full canvas with the texture. ` +
+      `No standalone centered object, no empty background, no white background, no border/frame/text. `;
   } else {
     final +=
-      `Asset type: NON-TILE STANDALONE SPRITE. ` +
-      `Composition is mandatory: the subject must occupy about 60% to 80% of the canvas, centered, large, readable, and clearly visible after being downscaled to 32x32. ` +
-      `Create EXACTLY ONE standalone subject. The subject must contain colored visible details; never output only a blank or almost blank background. ` +
-      `If the subject is a flower or plant, petals, flower center, stem, and leaves must be visible. ` +
-      `Do NOT draw ground, dirt, grass patches, tile floors, beige paper, shadows, bases, platforms, frames, outlines around the canvas, or any full-canvas texture. ` +
-      `Do NOT make a repeating tile and do NOT fill the canvas with decorative texture. ` +
-      `Leave clear empty space around the subject, but the subject itself must be large and prominent. ` +
-      `Use a simple flat solid pure white background color ${BG_COLOR} behind the subject. ` +
-      `The background should be plain white and easy to remove later, but drawing the visible subject is more important than making the background perfectly exact. `;
+      `Type: STANDALONE SPRITE, not a tile. Draw exactly one large centered subject occupying 60-80% of canvas, readable at 32x32. ` +
+      `Subject must have visible colored details; never output blank background only. ` +
+      `For flowers/plants: visible petals, center, stem, leaves. ` +
+      `No ground, dirt, grass patch, floor tile, shadow, base, platform, border, frame, full-canvas texture, text. ` +
+      `Plain solid white background ${BG_COLOR}. Drawing the subject is more important than perfect background. `;
   }
 
   if (ref) {
-    if (kind === 'tile') {
-      final +=
-        `Use the provided reference image ONLY for pixel-art style, palette, lighting simplicity, and material feel. ` +
-        `Do NOT copy the reference subject unless it matches the requested subject. The requested subject and TILE rules always win. `;
-    } else {
-      final +=
-        `Use the provided reference image ONLY for pixel-art style and color palette. ` +
-        `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, border, frame, shadow, ground, or background. ` +
-        `The requested subject must remain one large standalone non-tile sprite on a plain pure white background. `;
-    }
+    final += kind === 'tile'
+      ? `Reference is style/palette only; requested tile rules win. `
+      : `Reference is style/palette only; do not copy its subject, layout, background, border, ground, or texture. `;
   }
 
-  final += `Final check before output: there must be one large visible ${rawSubject} sprite in the center, on a plain white background. Output exactly one image.`;
-  return final;
+  final += kind === 'sprite'
+    ? `Final: one large visible ${rawSubject} sprite centered on white background.`
+    : `Final: one full-canvas ${rawSubject} tile texture.`;
+
+  return capPrompt(final);
 }
 
 // ---------- 配置 ----------
