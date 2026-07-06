@@ -12,21 +12,51 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // 抠图用的纯色背景（magenta 在多数像素素材里不出现，便于 chroma key）
 const BG_COLOR = '#FF00FF';
 
-// 像素风强制约束（全英文）。非地形主体使用纯色背景以便抠图；地形类铺满纹理。
-function buildPixelPrompt(promptText, ref) {
-  const p =
-    `Pixel art tile/sprite for 2D top-down RPG game. Subject: [${promptText.trim()}]. ` +
+function normalizeAssetKind(assetKind) {
+  return assetKind === 'tile' ? 'tile' : 'sprite';
+}
+
+// 像素风强制约束（全英文）。地块和非地块明确分流，避免独立素材被参考图/地块规则铺满。
+function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
+  const kind = normalizeAssetKind(assetKind);
+  const subject = promptText.trim();
+  const common =
+    `Pixel art asset for a 2D top-down RPG game. Subject: [${subject}]. ` +
     `STRICT rules — flat colors only, visible square pixels, no smoothing/AA/blur/gradients/photorealism. ` +
-    `This must be a SINGLE repeating tile texture or standalone sprite — absolutely NO borders, frames, edges, vignettes, or decorative borders around the image. ` +
     `Draw ONLY what is explicitly described in the subject above. ` +
-    `Do NOT spontaneously add any unrequested objects, decorations, or surrounding scenery — the image must contain exactly the subject and nothing more. ` +
-    `If the subject is ground/terrain, fill the ENTIRE image with that texture uniformly. ` +
-    `For non-ground subjects, the background MUST be a single solid flat pure color (${BG_COLOR}), with NO transparency and NO gradients — only the subject appears on this pure-color background. ` +
-    `Output exactly and only what was requested.`;
-  let final = p;
-  if (ref) {
-    final += ` The subject's shape, proportions, color palette and art style MUST closely follow the provided reference image.`;
+    `Do NOT spontaneously add any unrequested objects, decorations, scenery, borders, frames, edges, vignettes, text, logos, or UI elements. `;
+
+  let final = common;
+  if (kind === 'tile') {
+    final +=
+      `Asset type: TILE / GROUND TEXTURE. ` +
+      `The output MUST be a single seamless/repeating terrain tile texture. ` +
+      `Fill the ENTIRE image uniformly with the requested terrain/material texture. ` +
+      `Do NOT create a centered standalone object and do NOT leave empty background. ` +
+      `No solid magenta background; the terrain texture itself must cover the full canvas. `;
+  } else {
+    final +=
+      `Asset type: NON-TILE STANDALONE SPRITE. ` +
+      `The output MUST be exactly one standalone centered object/prop/item/plant/character described by the subject. ` +
+      `Do NOT make a repeating tile, do NOT fill the canvas with texture, and do NOT copy any terrain/tile layout. ` +
+      `Leave clear empty space around the subject where possible. ` +
+      `The background MUST be one single solid flat pure color (${BG_COLOR}), with NO transparency and NO gradients; only the requested subject appears on that background. `;
   }
+
+  if (ref) {
+    if (kind === 'tile') {
+      final +=
+        `Use the provided reference image ONLY for pixel-art style, palette, lighting simplicity, and material feel. ` +
+        `Do NOT copy the reference subject unless it matches the requested subject. The requested subject and TILE rules always win. `;
+    } else {
+      final +=
+        `Use the provided reference image ONLY for pixel-art style and color palette. ` +
+        `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, or background. ` +
+        `The requested subject must remain a standalone non-tile sprite on the solid ${BG_COLOR} background. `;
+    }
+  }
+
+  final += `Output exactly and only what was requested.`;
   return final;
 }
 
@@ -107,18 +137,20 @@ app.post('/api/sprites/:id/cells/:index/replace', (req, res) => generateCell(req
 async function generateCell(req, res) {
   try {
     const { id, index } = req.params;
-    const { prompt, reference, seed } = req.body || {};
+    const { prompt, reference, seed, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const kind = normalizeAssetKind(assetKind);
 
     let ref = reference;
     if (reference === false) {
       ref = null;
-    } else if (!ref) {
+    } else if (!ref && kind === 'tile') {
+      // 只有地块默认沿用首图参考；非地块默认不套用首图，避免花朵/道具被地块参考图铺满。
       ref = await sprites.firstImageDataUrl(id);
       if (!ref) ref = await sprites.firstImageOfAnyOther(id);
     }
 
-    const finalPrompt = buildPixelPrompt(prompt, ref);
+    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
 
     const cfg = await getConfig();
     const imgs = await minimax.generateImage({
@@ -130,7 +162,7 @@ async function generateCell(req, res) {
     });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
 
-    const tag = prompt.trim();
+    const tag = `${kind === 'tile' ? '地块' : '非地块'}：${prompt.trim()}`;
     const meta = await sprites.applyCell(id, index, imgs[0], tag);
     res.json({ ok: true, meta });
   } catch (e) {
@@ -172,16 +204,17 @@ app.put('/api/sprites/:id/cells/:index/image', async (req, res) => {
 // 生成一张原始大图（不落盘），返回 base64，供前端按区域切片
 app.post('/api/sprites/:id/generate-raw', async (req, res) => {
   try {
-    const { prompt, reference, seed, width, height } = req.body || {};
+    const { prompt, reference, seed, width, height, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const kind = normalizeAssetKind(assetKind);
     let ref = reference;
     if (reference === false) {
       ref = null;
-    } else if (!ref) {
+    } else if (!ref && kind === 'tile') {
       ref = await sprites.firstImageDataUrl(req.params.id);
       if (!ref) ref = await sprites.firstImageOfAnyOther(req.params.id);
     }
-    const finalPrompt = buildPixelPrompt(prompt, ref);
+    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
     const cfg = await getConfig();
     const imgs = await minimax.generateImage({
       model: cfg.model,
@@ -202,9 +235,10 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
 // ---------- 通用生成（行走图模块等） ----------
 app.post('/api/generate', async (req, res) => {
   try {
-    const { prompt, reference, seed, n } = req.body || {};
+    const { prompt, reference, seed, n, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
-    const finalPrompt = buildPixelPrompt(prompt, reference);
+    const kind = normalizeAssetKind(assetKind);
+    const finalPrompt = buildPixelPrompt(prompt, reference, kind);
     const cfg = await getConfig();
     const imgs = await minimax.generateImage({
       model: cfg.model,
