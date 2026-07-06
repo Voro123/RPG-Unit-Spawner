@@ -5,6 +5,7 @@
   "description": "AI 像素游戏素材生成器（MINIMAX）— 精灵图 + 行走图",
   "type": "commonjs",
   "scripts": {
+    "predev": "git pull",
     "dev": "node server/index.js"
   },
   "dependencies": {
