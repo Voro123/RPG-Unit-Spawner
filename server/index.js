@@ -9,8 +9,8 @@ const app = express();
 app.use(express.json({ limit: '15mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// 抠图用的纯色背景（magenta 在多数像素素材里不出现，便于 chroma key）
-const BG_COLOR = '#FF00FF';
+// 非地块素材使用纯白背景，方便和主体区分，也便于后续去背。
+const BG_COLOR = '#FFFFFF';
 
 function normalizeAssetKind(assetKind) {
   return assetKind === 'tile' ? 'tile' : 'sprite';
@@ -42,7 +42,7 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
       `The output MUST be a single seamless/repeating terrain tile texture. ` +
       `Fill the ENTIRE image uniformly with the requested terrain/material texture. ` +
       `Do NOT create a centered standalone object and do NOT leave empty background. ` +
-      `No solid magenta background; the terrain texture itself must cover the full canvas. `;
+      `No plain white background; the terrain texture itself must cover the full canvas. `;
   } else {
     final +=
       `Asset type: NON-TILE STANDALONE SPRITE. ` +
@@ -52,8 +52,8 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
       `Do NOT draw ground, dirt, grass patches, tile floors, beige paper, shadows, bases, platforms, frames, outlines around the canvas, or any full-canvas texture. ` +
       `Do NOT make a repeating tile and do NOT fill the canvas with decorative texture. ` +
       `Leave clear empty space around the subject, but the subject itself must be large and prominent. ` +
-      `Use a simple flat solid high-contrast background color ${BG_COLOR} behind the subject. ` +
-      `The background should be plain and easy to remove later, but drawing the visible subject is more important than making the background perfectly exact. `;
+      `Use a simple flat solid pure white background color ${BG_COLOR} behind the subject. ` +
+      `The background should be plain white and easy to remove later, but drawing the visible subject is more important than making the background perfectly exact. `;
   }
 
   if (ref) {
@@ -65,11 +65,11 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
       final +=
         `Use the provided reference image ONLY for pixel-art style and color palette. ` +
         `Do NOT copy the reference subject, proportions, layout, tiling pattern, full-canvas texture, border, frame, shadow, ground, or background. ` +
-        `The requested subject must remain one large standalone non-tile sprite on a plain solid background. `;
+        `The requested subject must remain one large standalone non-tile sprite on a plain pure white background. `;
     }
   }
 
-  final += `Final check before output: there must be one large visible ${rawSubject} sprite in the center. Output exactly one image.`;
+  final += `Final check before output: there must be one large visible ${rawSubject} sprite in the center, on a plain white background. Output exactly one image.`;
   return final;
 }
 
