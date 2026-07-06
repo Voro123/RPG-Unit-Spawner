@@ -14,15 +14,21 @@
 
   async function api(url, opt = {}) {
     const method = (opt.method || 'GET').toUpperCase();
-    if (method === 'GET' || method === 'HEAD') return fetch(withProject(url), opt);
-    let body = opt.body;
     const headers = { ...(opt.headers || {}) };
+    if (currentProjectId) headers['x-project-id'] = currentProjectId;
+
+    if (method === 'GET' || method === 'HEAD') {
+      return fetch(withProject(url), { ...opt, headers });
+    }
+
+    let body = opt.body;
     if (headers['Content-Type'] === 'application/json' && body) {
       try {
         const json = JSON.parse(body);
         body = JSON.stringify({ ...json, projectId: currentProjectId });
       } catch { /* keep body */ }
     }
+
     return fetch(url, { ...opt, headers, body });
   }
 
