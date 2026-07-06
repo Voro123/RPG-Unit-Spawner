@@ -71,6 +71,18 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   return capPrompt(final);
 }
 
+async function resolveAutoReference(sheetId, kind) {
+  // 自动参考时按素材类型分流：非地块参考首个非地块，地块参考首个地块，避免两类互相带偏。
+  let ref = await sprites.firstImageDataUrlByKind(sheetId, kind);
+  if (!ref) ref = await sprites.firstImageOfAnyOtherByKind(sheetId, kind);
+  // 兼容旧数据：老格子可能没有“地块/非地块”前缀，地块仍可回退到任意首图；非地块不回退，避免被地块图带偏。
+  if (!ref && kind === 'tile') {
+    ref = await sprites.firstImageDataUrl(sheetId);
+    if (!ref) ref = await sprites.firstImageOfAnyOther(sheetId);
+  }
+  return ref;
+}
+
 // ---------- 配置 ----------
 app.get('/api/config', async (req, res) => {
   const c = await getConfig();
@@ -155,10 +167,8 @@ async function generateCell(req, res) {
     let ref = reference;
     if (reference === false) {
       ref = null;
-    } else if (!ref && kind === 'tile') {
-      // 只有地块默认沿用首图参考；非地块默认不套用首图，避免花朵/道具被地块参考图铺满。
-      ref = await sprites.firstImageDataUrl(id);
-      if (!ref) ref = await sprites.firstImageOfAnyOther(id);
+    } else if (!ref) {
+      ref = await resolveAutoReference(id, kind);
     }
 
     const finalPrompt = buildPixelPrompt(prompt, ref, kind);
@@ -221,9 +231,8 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
     let ref = reference;
     if (reference === false) {
       ref = null;
-    } else if (!ref && kind === 'tile') {
-      ref = await sprites.firstImageDataUrl(req.params.id);
-      if (!ref) ref = await sprites.firstImageOfAnyOther(req.params.id);
+    } else if (!ref) {
+      ref = await resolveAutoReference(req.params.id, kind);
     }
     const finalPrompt = buildPixelPrompt(prompt, ref, kind);
     const cfg = await getConfig();
