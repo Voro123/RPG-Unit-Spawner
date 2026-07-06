@@ -3,13 +3,14 @@ const path = require('path');
 const fs = require('fs/promises');
 const { getConfig, saveConfig, maskKey } = require('./config');
 const minimax = require('./minimax');
-const sprites = require('./sprites');
+const sprites = require('./projectSprites');
+const projects = require('./projects');
+const walks = require('./walks');
 
 const app = express();
 app.use(express.json({ limit: '15mb' }));
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
-// 非地块素材使用纯白背景，方便和主体区分，也便于后续去背。
 const BG_COLOR = '#FFFFFF';
 const MAX_MINIMAX_PROMPT_CHARS = 1400;
 const MAX_SUBJECT_CHARS = 260;
@@ -35,7 +36,6 @@ function capPrompt(prompt) {
   return prompt.length > MAX_MINIMAX_PROMPT_CHARS ? prompt.slice(0, MAX_MINIMAX_PROMPT_CHARS) : prompt;
 }
 
-// 像素风强制约束（短模板）。MINIMAX prompt 必须 <1500 chars，所以这里强制压缩并截断。
 function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
   const rawSubject = clipText(promptText);
@@ -71,17 +71,45 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   return capPrompt(final);
 }
 
-async function resolveAutoReference(sheetId, kind) {
-  // 自动参考时按素材类型分流：非地块参考首个非地块，地块参考首个地块，避免两类互相带偏。
-  let ref = await sprites.firstImageDataUrlByKind(sheetId, kind);
-  if (!ref) ref = await sprites.firstImageOfAnyOtherByKind(sheetId, kind);
-  // 兼容旧数据：老格子可能没有“地块/非地块”前缀，地块仍可回退到任意首图；非地块不回退，避免被地块图带偏。
+function buildWalkPrompt({ prompt, dirs = 4, frames = 3, cellSize = 32, ref }) {
+  let out =
+    `Pixel art walking animation sprite sheet for a 2D top-down RPG. Character: ${clipText(prompt)}. ` +
+    `${Number(dirs) || 4} directions, ${Number(frames) || 3} frames per direction, each frame about ${Number(cellSize) || 32}px. ` +
+    `Arrange frames in a clean grid, directions by rows, frames by columns. ` +
+    `Consistent character design, same scale, centered in each frame, no text, no UI, no frame borders, no blur, no gradients. ` +
+    `Transparent background if possible; otherwise plain solid white background. `;
+  if (ref) out += `Reference is for the same character design/style only; preserve identity and outfit while making the walk sheet. `;
+  return capPrompt(out);
+}
+
+async function requireProjectId(req) {
+  const projectId = projects.projectIdFromReq(req);
+  await projects.requireProject(projectId);
+  return projectId;
+}
+
+async function resolveAutoReference(projectId, sheetId, kind) {
+  let ref = await sprites.firstImageDataUrlByKind(projectId, sheetId, kind);
+  if (!ref) ref = await sprites.firstImageOfAnyOtherByKind(projectId, sheetId, kind);
   if (!ref && kind === 'tile') {
-    ref = await sprites.firstImageDataUrl(sheetId);
-    if (!ref) ref = await sprites.firstImageOfAnyOther(sheetId);
+    ref = await sprites.firstImageDataUrl(projectId, sheetId);
+    if (!ref) ref = await sprites.firstImageOfAnyOther(projectId, sheetId);
   }
   return ref;
 }
+
+// ---------- 项目 ----------
+app.get('/api/projects', async (req, res) => {
+  res.json(await projects.listProjects());
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    res.json(await projects.createProject(req.body || {}));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ---------- 配置 ----------
 app.get('/api/config', async (req, res) => {
@@ -96,7 +124,6 @@ app.get('/api/config', async (req, res) => {
   });
 });
 
-// 测试连接：用一次最小生成验证 key 是否有效（含区域/base_url）
 app.post('/api/config/test', async (req, res) => {
   const r = await minimax.validateKey();
   res.json(r);
@@ -105,10 +132,7 @@ app.post('/api/config/test', async (req, res) => {
 app.post('/api/config', async (req, res) => {
   const cur = await getConfig();
   const { api_key, model, base_url } = req.body || {};
-  if (model && !minimax.listModels().includes(model)) {
-    return res.status(400).json({ error: 'INVALID_MODEL' });
-  }
-  // api_key 留空则保留已有 key，避免误清空
+  if (model && !minimax.listModels().includes(model)) return res.status(400).json({ error: 'INVALID_MODEL' });
   const key = (api_key && api_key.trim()) || cur.api_key || '';
   const m = model || cur.model || 'image-01';
   const url = base_url && base_url.trim() ? base_url.trim() : (cur.base_url || 'https://api.minimax.io');
@@ -118,17 +142,28 @@ app.post('/api/config', async (req, res) => {
 
 // ---------- 精灵图管理 ----------
 app.get('/api/sprites', async (req, res) => {
-  res.json(await sprites.listSheets());
+  try {
+    const projectId = await requireProjectId(req);
+    res.json(await sprites.listSheets(projectId));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.post('/api/sprites', async (req, res) => {
-  const { name, cellSize, cols, rows } = req.body || {};
-  res.json(await sprites.createSheet({ name, cellSize, cols, rows }));
+  try {
+    const projectId = await requireProjectId(req);
+    const { name, cellSize, cols, rows } = req.body || {};
+    res.json(await sprites.createSheet(projectId, { name, cellSize, cols, rows }));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.get('/api/sprites/:id', async (req, res) => {
   try {
-    res.json(await sprites.getSheet(req.params.id));
+    const projectId = await requireProjectId(req);
+    res.json(await sprites.getSheet(projectId, req.params.id));
   } catch {
     res.status(404).json({ error: 'NOT_FOUND' });
   }
@@ -136,7 +171,8 @@ app.get('/api/sprites/:id', async (req, res) => {
 
 app.get('/api/sprites/:id/cells/:index', async (req, res) => {
   try {
-    const buf = await sprites.readCellImage(req.params.id, req.params.index);
+    const projectId = await requireProjectId(req);
+    const buf = await sprites.readCellImage(projectId, req.params.id, req.params.index);
     res.set('Cache-Control', 'no-store');
     res.type('png').send(buf);
   } catch {
@@ -146,45 +182,33 @@ app.get('/api/sprites/:id/cells/:index', async (req, res) => {
 
 app.get('/api/sprites/:id/skill', async (req, res) => {
   try {
-    const t = await fs.readFile(sprites.skillFile(req.params.id), 'utf8');
+    const projectId = await requireProjectId(req);
+    const t = await fs.readFile(sprites.skillFile(projectId, req.params.id), 'utf8');
     res.type('markdown').send(t);
   } catch {
     res.status(404).end();
   }
 });
 
-// 生成 / 替换格子
 app.post('/api/sprites/:id/cells/:index/generate', (req, res) => generateCell(req, res));
 app.post('/api/sprites/:id/cells/:index/replace', (req, res) => generateCell(req, res));
 
 async function generateCell(req, res) {
   try {
+    const projectId = await requireProjectId(req);
     const { id, index } = req.params;
     const { prompt, reference, seed, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
-
     let ref = reference;
-    if (reference === false) {
-      ref = null;
-    } else if (!ref) {
-      ref = await resolveAutoReference(id, kind);
-    }
-
-    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
+    if (reference === false) ref = null;
+    else if (!ref) ref = await resolveAutoReference(projectId, id, kind);
 
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({
-      model: cfg.model,
-      prompt: finalPrompt,
-      referenceImageBase64: ref,
-      seed,
-      promptOptimizer: false,
-    });
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, ref, kind), referenceImageBase64: ref, seed, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-
     const tag = `${kind === 'tile' ? '地块' : '非地块'}：${prompt.trim()}`;
-    const meta = await sprites.applyCell(id, index, imgs[0], tag);
+    const meta = await sprites.applyCell(projectId, id, index, imgs[0], tag);
     res.json({ ok: true, meta });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -193,7 +217,8 @@ async function generateCell(req, res) {
 
 app.delete('/api/sprites/:id/cells/:index', async (req, res) => {
   try {
-    const meta = await sprites.deleteCell(req.params.id, req.params.index);
+    const projectId = await requireProjectId(req);
+    const meta = await sprites.deleteCell(projectId, req.params.id, req.params.index);
     res.json({ ok: true, meta });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -202,49 +227,38 @@ app.delete('/api/sprites/:id/cells/:index', async (req, res) => {
 
 app.put('/api/sprites/:id/cells/:index/tag', async (req, res) => {
   try {
+    const projectId = await requireProjectId(req);
     const { tag } = req.body || {};
-    const meta = await sprites.updateTag(req.params.id, req.params.index, tag);
+    const meta = await sprites.updateTag(projectId, req.params.id, req.params.index, tag);
     res.json({ ok: true, meta });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// 直接写回一张 base64 图到指定格（用于跨格大图切片后逐格落盘）
 app.put('/api/sprites/:id/cells/:index/image', async (req, res) => {
   try {
+    const projectId = await requireProjectId(req);
     const { image, tag } = req.body || {};
     if (!image) return res.status(400).json({ error: 'NO_IMAGE' });
-    const meta = await sprites.applyCell(req.params.id, req.params.index, image, tag);
+    const meta = await sprites.applyCell(projectId, req.params.id, req.params.index, image, tag);
     res.json({ ok: true, meta });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// 生成一张原始大图（不落盘），返回 base64，供前端按区域切片
 app.post('/api/sprites/:id/generate-raw', async (req, res) => {
   try {
+    const projectId = await requireProjectId(req);
     const { prompt, reference, seed, width, height, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
     let ref = reference;
-    if (reference === false) {
-      ref = null;
-    } else if (!ref) {
-      ref = await resolveAutoReference(req.params.id, kind);
-    }
-    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
+    if (reference === false) ref = null;
+    else if (!ref) ref = await resolveAutoReference(projectId, req.params.id, kind);
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({
-      model: cfg.model,
-      prompt: finalPrompt,
-      referenceImageBase64: ref,
-      seed,
-      width,
-      height,
-      promptOptimizer: false,
-    });
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, ref, kind), referenceImageBase64: ref, seed, width, height, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
     res.json({ image: imgs[0] });
   } catch (e) {
@@ -252,22 +266,54 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
   }
 });
 
-// ---------- 通用生成（行走图模块等） ----------
+// ---------- 行走图 ----------
+app.get('/api/walks', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    res.json(await walks.listWalks(projectId));
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.get('/api/walks/:id/image', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    const buf = await walks.readWalkImage(projectId, req.params.id);
+    res.set('Cache-Control', 'no-store');
+    res.type('png').send(buf);
+  } catch {
+    res.status(404).end();
+  }
+});
+
+app.post('/api/walks/generate', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    const { prompt, reference, seed, dirs, frames, cellSize } = req.body || {};
+    if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    let ref = reference;
+    if (reference === false) ref = null;
+    else if (!ref) ref = await walks.firstWalkDataUrl(projectId);
+    const cfg = await getConfig();
+    const finalPrompt = buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: finalPrompt, referenceImageBase64: ref, seed, promptOptimizer: false });
+    if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
+    const meta = await walks.saveWalk(projectId, { name: clipText(prompt, 40), prompt, dirs, frames, cellSize, imageBase64: imgs[0] });
+    res.json({ ok: true, meta, image: imgs[0] });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- 通用生成（保留兼容） ----------
 app.post('/api/generate', async (req, res) => {
   try {
     const { prompt, reference, seed, n, assetKind } = req.body || {};
     if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
-    const finalPrompt = buildPixelPrompt(prompt, reference, kind);
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({
-      model: cfg.model,
-      prompt: finalPrompt,
-      referenceImageBase64: reference,
-      seed,
-      n,
-      promptOptimizer: false,
-    });
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, reference, kind), referenceImageBase64: reference, seed, n, promptOptimizer: false });
     res.json({ images: imgs });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -275,6 +321,4 @@ app.post('/api/generate', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`rpg-unit-spawner running at http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`rpg-unit-spawner running at http://localhost:${PORT}`));
