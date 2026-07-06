@@ -114,6 +114,51 @@
     };
   }
 
+  function installSpriteBackgroundKindGuard() {
+    const radios = Array.from(document.querySelectorAll('input[name=assetKind]'));
+    const removeBg = $('removeBg');
+    const bgColor = $('bgColor');
+    const bgTolerance = $('bgTolerance');
+    const bgPreview = $('bgPreview');
+    const applyBtn = $('applyBgBtn');
+    if (!radios.length || !removeBg) return;
+
+    const bgTitle = removeBg.closest('.row')?.previousElementSibling;
+    const removeRow = removeBg.closest('.row');
+    const toleranceLabel = bgTolerance?.previousElementSibling;
+    const previewRow = bgPreview?.closest('.row');
+    const note = previewRow?.nextElementSibling;
+    const elements = [bgTitle, removeRow, toleranceLabel, bgTolerance, previewRow, note];
+    const controls = [removeBg, bgColor, bgTolerance, applyBtn];
+
+    function visible(el, on) {
+      if (el) el.style.display = on ? '' : 'none';
+    }
+
+    function sync() {
+      const kind = document.querySelector('input[name=assetKind]:checked')?.value || 'sprite';
+      const isSprite = kind === 'sprite';
+      if (isSprite) {
+        if (removeBg.dataset.spriteChecked !== undefined) {
+          removeBg.checked = removeBg.dataset.spriteChecked === 'true';
+        }
+      } else {
+        removeBg.dataset.spriteChecked = String(removeBg.checked);
+        removeBg.checked = false;
+      }
+      elements.forEach((el) => visible(el, isSprite));
+      controls.forEach((el) => { if (el) el.disabled = !isSprite; });
+      removeBg.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    removeBg.addEventListener('change', () => {
+      const kind = document.querySelector('input[name=assetKind]:checked')?.value || 'sprite';
+      if (kind === 'sprite') removeBg.dataset.spriteChecked = String(removeBg.checked);
+    });
+    radios.forEach((r) => r.addEventListener('change', sync));
+    sync();
+  }
+
   async function init({ requireProject = true } = {}) {
     injectStyle();
     const list = await loadProjects();
@@ -127,6 +172,8 @@
     renderBar();
     return currentProjectId;
   }
+
+  document.addEventListener('DOMContentLoaded', installSpriteBackgroundKindGuard);
 
   window.Project = {
     init,
