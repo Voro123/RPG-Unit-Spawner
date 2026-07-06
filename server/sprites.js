@@ -166,11 +166,34 @@ async function firstImageDataUrl(id) {
   return `data:image/png;base64,${buf.toString('base64')}`;
 }
 
+function tagPrefixForKind(assetKind) {
+  return assetKind === 'tile' ? '地块：' : '非地块：';
+}
+
+async function firstImageDataUrlByKind(id, assetKind) {
+  const meta = await getSheet(id);
+  const prefix = tagPrefixForKind(assetKind);
+  const cell = meta.cells.find((c) => c.imageRef && typeof c.tag === 'string' && c.tag.startsWith(prefix));
+  if (!cell) return null;
+  const buf = await readCellImage(id, cell.index);
+  return `data:image/png;base64,${buf.toString('base64')}`;
+}
+
 async function firstImageOfAnyOther(id) {
   const sheets = await listSheets();
   for (const s of sheets) {
     if (s.id === id) continue;
     const dataUrl = await firstImageDataUrl(s.id);
+    if (dataUrl) return dataUrl;
+  }
+  return null;
+}
+
+async function firstImageOfAnyOtherByKind(id, assetKind) {
+  const sheets = await listSheets();
+  for (const s of sheets) {
+    if (s.id === id) continue;
+    const dataUrl = await firstImageDataUrlByKind(s.id, assetKind);
     if (dataUrl) return dataUrl;
   }
   return null;
@@ -189,5 +212,7 @@ module.exports = {
   updateTag,
   firstImageDataUrl,
   firstImageOfAnyOther,
+  firstImageDataUrlByKind,
+  firstImageOfAnyOtherByKind,
   skillFile,
 };
