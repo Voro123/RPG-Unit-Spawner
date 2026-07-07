@@ -1,7 +1,9 @@
 (() => {
+  const BG_SETTINGS_KEY = 'rpg-unit-spawner.cellBgSettings.v1';
   let installed = false;
   let paintActive = false;
   let loadTimer = null;
+  let restoringBgControls = false;
   const state = {
     sheetId: '',
     loadedKey: '',
@@ -71,6 +73,66 @@
   function hexToRgb(hex) {
     const n = parseInt(String(hex || '#000000').replace('#', ''), 16) || 0;
     return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function bgStorageKey(sheetId, index) {
+    return `${projectId() || 'default'}:${sheetId}:${index}`;
+  }
+
+  function defaultBgSettings() {
+    return { bgTolerance: '24', bgColor: '#ffffff', removeBg: true };
+  }
+
+  function readAllBgSettings() {
+    try { return JSON.parse(localStorage.getItem(BG_SETTINGS_KEY) || '{}') || {}; }
+    catch { return {}; }
+  }
+
+  function writeAllBgSettings(next) {
+    localStorage.setItem(BG_SETTINGS_KEY, JSON.stringify(next));
+  }
+
+  function readCellBgSettings(sheetId, index) {
+    const all = readAllBgSettings();
+    return { ...defaultBgSettings(), ...(all[bgStorageKey(sheetId, index)] || {}) };
+  }
+
+  function currentBgControlSettings() {
+    return {
+      bgTolerance: String(Math.max(0, Math.min(255, Number($('bgTolerance')?.value || 24)))),
+      bgColor: $('bgColor')?.value || '#ffffff',
+      removeBg: !!$('removeBg')?.checked,
+    };
+  }
+
+  function writeBgSettingsForIndexes(sheetId, indexes) {
+    if (!sheetId || !indexes.length) return;
+    const all = readAllBgSettings();
+    const settings = currentBgControlSettings();
+    indexes.forEach((index) => {
+      all[bgStorageKey(sheetId, index)] = settings;
+    });
+    writeAllBgSettings(all);
+  }
+
+  function setBgControlsForSelection(sheetId, indexes) {
+    if (!sheetId || !indexes.length) return;
+    const settings = readCellBgSettings(sheetId, indexes[0]);
+    const tolerance = $('bgTolerance');
+    const color = $('bgColor');
+    const remove = $('removeBg');
+    restoringBgControls = true;
+    if (tolerance) tolerance.value = String(settings.bgTolerance);
+    if (color) color.value = settings.bgColor || '#ffffff';
+    if (remove) remove.checked = !!settings.removeBg;
+    if ($('bgToleranceValue')) $('bgToleranceValue').textContent = String(settings.bgTolerance);
+    ['bgTolerance', 'bgColor', 'removeBg'].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    restoringBgControls = false;
   }
 
   function selectedBgColor() {
@@ -163,18 +225,20 @@
       return;
     }
     const indexes = state.items.map((item) => item.index);
+    const settings = currentBgControlSettings();
     if (state.items.length === 1) {
-      setMeta(`已载入：格子 ${indexes[0]} · ${state.size}×${state.size}。相近色调整会直接反映到像素编辑器；左键绘制，右键吸色。`);
+      setMeta(`已载入：格子 ${indexes[0]} · ${state.size}×${state.size} · 相近色 ${settings.bgTolerance}。相近色配置只属于当前格子；左键绘制，右键吸色。`);
       return;
     }
-    setMeta(`已载入 ${state.items.length} 个格子：${indexes.join(', ')} · ${state.size}×${state.size}。当前画布显示第一个格子，像素编辑与相近色调整会同时作用到全部选中格子。`);
+    setMeta(`已载入 ${state.items.length} 个格子：${indexes.join(', ')} · 相近色 ${settings.bgTolerance}。当前画布显示第一个格子；像素编辑与相近色调整会同时作用并保存到这些选中格子。`);
   }
 
-  function reapplyBgPreviewToEditor() {
+  function reapplyBgPreviewToEditor({ updateGrid = true } = {}) {
     if (!state.items.length) return;
     for (const item of state.items) {
       item.currentCanvas = cloneCanvas(item.baseCanvas);
       if (shouldRemoveBg()) edgeColorToTransparent(item.currentCanvas, selectedBgColor(), bgTolerance());
+      if (updateGrid) updateGridCellPreview(item.index, item.currentCanvas.toDataURL('image/png'));
     }
     renderDisplayCanvas();
     updateMetaLoaded();
@@ -195,6 +259,7 @@
     }
     if (!force && key === state.loadedKey) return;
     setMeta('载入中…');
+    setBgControlsForSelection(sheetId, indexes);
     const sheet = await fetchJson(`/api/sprites/${sheetId}`);
     const size = Math.max(1, Number(sheet.cellSize) || 32);
     const items = [];
@@ -217,6 +282,7 @@
     state.items = items;
     state.loadedKey = key;
     renderDisplayCanvas();
+    state.items.forEach((item) => updateGridCellPreview(item.index, item.currentCanvas.toDataURL('image/png')));
     updateMetaLoaded();
   }
 
@@ -245,6 +311,7 @@
         img.data[3] = alpha;
         ctx.putImageData(img, x, y);
       });
+      updateGridCellPreview(item.index, item.currentCanvas.toDataURL('image/png'));
     }
     renderDisplayCanvas();
     syncSwatch();
@@ -282,6 +349,7 @@
       setMeta('没有可保存的像素图。');
       return;
     }
+    writeBgSettingsForIndexes(state.items[0].sheetId, state.items.map((item) => item.index));
     setMeta(`保存中…（${state.items.length} 个格子）`);
     for (const item of state.items) {
       const tag = state.items.length === 1 ? ($('tagEdit')?.value ?? item.tag) : item.tag;
@@ -345,7 +413,7 @@
       wrapper = document.createElement('div');
       wrapper.id = 'pixelEditorBgControls';
       wrapper.className = 'pixel-editor-bg-controls';
-      wrapper.innerHTML = '<div style="font-weight:700;margin:8px 0 6px">相近色调整</div><p class="muted" style="margin-top:0">这里的相近色设置会直接同步到像素编辑器当前显示内容；若框选多个格子，将同时作用到全部选中格子。</p>';
+      wrapper.innerHTML = '<div style="font-weight:700;margin:8px 0 6px">相近色调整</div><p class="muted" style="margin-top:0">这里的相近色配置按格子独立保存；框选多个格子时，拖动范围会同时写入这些格子。</p>';
       const stage = box.querySelector('.pixel-editor-stage');
       box.insertBefore(wrapper, stage || box.lastChild);
     }
@@ -368,6 +436,12 @@
   function overrideButtons() {
     if ($('loadPixelBtn')) $('loadPixelBtn').onclick = () => loadSelectedPixelTargets(true).catch((e) => setMeta(e.message || String(e)));
     if ($('savePixelBtn')) $('savePixelBtn').onclick = () => saveSelectedPixelTargets().catch((e) => setMeta('保存失败：' + (e.message || e)));
+  }
+
+  function handleBgControlChanged() {
+    if (restoringBgControls) return;
+    writeBgSettingsForIndexes($('sheetSel')?.value || '', selectedIndexes());
+    reapplyBgPreviewToEditor();
   }
 
   function bindEditorSync() {
@@ -396,8 +470,8 @@
       if (!el || el.dataset.editorPreviewBound === '1') return;
       el.dataset.editorPreviewBound = '1';
       const eventName = id === 'removeBg' ? 'change' : 'input';
-      el.addEventListener(eventName, () => reapplyBgPreviewToEditor());
-      if (eventName !== 'change') el.addEventListener('change', () => reapplyBgPreviewToEditor());
+      el.addEventListener(eventName, handleBgControlChanged);
+      if (eventName !== 'change') el.addEventListener('change', handleBgControlChanged);
     });
 
     ['pixelColor', 'pixelAlpha', 'pixelTransparent'].forEach((id) => {
