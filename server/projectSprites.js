@@ -17,6 +17,21 @@ function base64ToBuf(base64) {
   return Buffer.from(m ? m[1] : base64, 'base64');
 }
 
+function normalizeAssetKind(kind) {
+  return kind === 'tile' ? 'tile' : (kind === 'sprite' ? 'sprite' : null);
+}
+
+function inferAssetKindFromTag(tag) {
+  const s = String(tag || '').trim();
+  if (s.startsWith('地块：')) return 'tile';
+  if (s.startsWith('非地块：')) return 'sprite';
+  return null;
+}
+
+function cellAssetKind(cell) {
+  return normalizeAssetKind(cell?.assetKind) || inferAssetKindFromTag(cell?.tag);
+}
+
 async function listSheets(projectId) {
   await ensure(projectId);
   let names = [];
@@ -44,7 +59,7 @@ async function createSheet(projectId, { name, cellSize = 32, cols = 8, rows = 8 
   await ensure(projectId);
   const id = newId();
   const cells = [];
-  for (let r = 0; r < Number(rows); r++) for (let c = 0; c < Number(cols); c++) cells.push({ index: cells.length, col: c, row: r, imageRef: null, tag: null });
+  for (let r = 0; r < Number(rows); r++) for (let c = 0; c < Number(cols); c++) cells.push({ index: cells.length, col: c, row: r, imageRef: null, tag: null, assetKind: null });
   const meta = { id, name: name || '未命名精灵图', cellSize: Number(cellSize), cols: Number(cols), rows: Number(rows), cells };
   await fs.mkdir(path.join(sheetDir(projectId, id), 'cells'), { recursive: true });
   await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2));
@@ -57,13 +72,15 @@ async function readCellImage(projectId, id, index) { return fs.readFile(cellFile
 async function saveCellImage(projectId, id, index, base64) { await fs.writeFile(cellFile(projectId, id, index), base64ToBuf(base64)); }
 function findCell(meta, index) { return meta.cells.find((c) => c.index === Number(index)); }
 
-async function applyCell(projectId, id, index, base64, tag) {
+async function applyCell(projectId, id, index, base64, tag, assetKind) {
   const meta = await getSheet(projectId, id);
   const cell = findCell(meta, index);
   if (!cell) throw new Error('CELL_NOT_FOUND');
   await saveCellImage(projectId, id, index, base64);
   cell.imageRef = `cells/${index}.png`;
   if (tag) cell.tag = tag;
+  const nextKind = normalizeAssetKind(assetKind) || inferAssetKindFromTag(tag) || cellAssetKind(cell);
+  if (nextKind) cell.assetKind = nextKind;
   await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2));
   await writeSkill(projectId, id, meta);
   await touchProject(projectId);
@@ -73,7 +90,7 @@ async function applyCell(projectId, id, index, base64, tag) {
 async function deleteCell(projectId, id, index) {
   const meta = await getSheet(projectId, id);
   const cell = findCell(meta, index);
-  if (cell) { cell.imageRef = null; cell.tag = null; }
+  if (cell) { cell.imageRef = null; cell.tag = null; cell.assetKind = null; }
   try { await fs.unlink(cellFile(projectId, id, index)); } catch { /* ignore */ }
   await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2));
   await writeSkill(projectId, id, meta);
@@ -84,7 +101,11 @@ async function deleteCell(projectId, id, index) {
 async function updateTag(projectId, id, index, tag) {
   const meta = await getSheet(projectId, id);
   const cell = findCell(meta, index);
-  if (cell) cell.tag = tag;
+  if (cell) {
+    cell.tag = tag;
+    const kind = inferAssetKindFromTag(tag);
+    if (kind) cell.assetKind = kind;
+  }
   await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2));
   await writeSkill(projectId, id, meta);
   await touchProject(projectId);
@@ -101,7 +122,7 @@ async function firstImageDataUrl(projectId, id) {
 function prefix(kind) { return kind === 'tile' ? '地块：' : '非地块：'; }
 async function firstImageDataUrlByKind(projectId, id, kind) {
   const meta = await getSheet(projectId, id);
-  const cell = meta.cells.find((c) => c.imageRef && typeof c.tag === 'string' && c.tag.startsWith(prefix(kind)));
+  const cell = meta.cells.find((c) => c.imageRef && (cellAssetKind(c) === kind || (typeof c.tag === 'string' && c.tag.startsWith(prefix(kind)))));
   if (!cell) return null;
   const buf = await readCellImage(projectId, id, cell.index);
   return `data:image/png;base64,${buf.toString('base64')}`;
