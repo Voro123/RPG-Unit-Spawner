@@ -31,6 +31,7 @@
   }
 
   function ensureBulkEnhancerScript() {
+    window.__pixelEditorUseBulkEditor = true;
     if ($('pixelEditorBulkBgScript')) return;
     const script = document.createElement('script');
     script.id = 'pixelEditorBulkBgScript';
@@ -49,6 +50,7 @@
   }
 
   async function syncPixelEditorFromSelection({ force = false } = {}) {
+    if (window.__pixelEditorUseBulkEditor) return;
     const box = $('pixelEditorBox');
     const canvas = $('pixelEditorCanvas');
     const meta = $('pixelEditorMeta');
