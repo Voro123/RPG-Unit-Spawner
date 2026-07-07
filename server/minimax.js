@@ -17,12 +17,7 @@ async function getBase() {
   return (c.base_url && c.base_url.trim()) || DEFAULT_BASE;
 }
 
-// 生成图像，返回 base64 数组
-async function generateImage({ model = 'image-01', prompt, referenceImageBase64, seed, n = 1, promptOptimizer, width, height } = {}) {
-  const { api_key } = await getConfig();
-  if (!api_key) throw new Error('MINIMAX_API_KEY_NOT_SET');
-
-  const base = await getBase();
+function buildImageRequestBody({ model = 'image-01', prompt, referenceImageBase64, seed, n = 1, promptOptimizer, width, height } = {}) {
   const body = {
     model,
     prompt,
@@ -38,8 +33,26 @@ async function generateImage({ model = 'image-01', prompt, referenceImageBase64,
   if (seed) body.seed = seed;
   if (referenceImageBase64) {
     body.subject_reference = [{ type: 'character', image_file: referenceImageBase64 }];
-    console.log(`[minimax] subject_reference sent (bytes=${referenceImageBase64.length})`);
   }
+  return body;
+}
+
+function redactImageRequest(body) {
+  const out = JSON.parse(JSON.stringify(body || {}));
+  if (Array.isArray(out.subject_reference)) {
+    out.subject_reference = out.subject_reference.map((r) => ({ ...r, image_file: r.image_file ? `<base64 omitted, ${String(r.image_file).length} chars>` : r.image_file }));
+  }
+  return out;
+}
+
+// 生成图像，返回 base64 数组
+async function generateImage(args = {}) {
+  const { api_key } = await getConfig();
+  if (!api_key) throw new Error('MINIMAX_API_KEY_NOT_SET');
+
+  const base = await getBase();
+  const body = buildImageRequestBody(args);
+  if (args.referenceImageBase64) console.log(`[minimax] subject_reference sent (bytes=${args.referenceImageBase64.length})`);
 
   const res = await fetch(`${base}/v1/image_generation`, {
     method: 'POST',
@@ -148,4 +161,4 @@ async function validateKey() {
   }
 }
 
-module.exports = { listModels, listTextModels, generateImage, validateKey, translateTileSlots };
+module.exports = { listModels, listTextModels, buildImageRequestBody, redactImageRequest, generateImage, validateKey, translateTileSlots };
