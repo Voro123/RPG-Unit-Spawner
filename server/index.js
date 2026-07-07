@@ -36,6 +36,11 @@ function capPrompt(prompt) {
   return prompt.length > MAX_MINIMAX_PROMPT_CHARS ? prompt.slice(0, MAX_MINIMAX_PROMPT_CHARS) : prompt;
 }
 
+function promptFromClient(finalPrompt) {
+  const p = String(finalPrompt || '').trim();
+  return p ? capPrompt(p) : null;
+}
+
 function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
   const rawSubject = clipText(promptText);
@@ -220,19 +225,21 @@ async function generateCell(req, res) {
   try {
     const projectId = await requireProjectId(req);
     const { id, index } = req.params;
-    const { prompt, reference, seed, assetKind } = req.body || {};
-    if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const { prompt, reference, seed, assetKind, finalPrompt } = req.body || {};
+    const customPrompt = promptFromClient(finalPrompt);
+    if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
     let ref = reference;
     if (reference === false) ref = null;
     else if (!ref) ref = await resolveAutoReference(projectId, id, kind);
 
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, ref, kind), referenceImageBase64: ref, seed, promptOptimizer: false });
+    const promptToSend = customPrompt || buildPixelPrompt(prompt, ref, kind);
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-    const tag = `${kind === 'tile' ? '地块' : '非地块'}：${prompt.trim()}`;
+    const tag = `${kind === 'tile' ? '地块' : '非地块'}：${(prompt || customPrompt).trim()}`;
     const meta = await sprites.applyCell(projectId, id, index, imgs[0], tag);
-    res.json({ ok: true, meta });
+    res.json({ ok: true, meta, prompt: promptToSend, promptLength: promptToSend.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -274,16 +281,18 @@ app.put('/api/sprites/:id/cells/:index/image', async (req, res) => {
 app.post('/api/sprites/:id/generate-raw', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
-    const { prompt, reference, seed, width, height, assetKind } = req.body || {};
-    if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const { prompt, reference, seed, width, height, assetKind, finalPrompt } = req.body || {};
+    const customPrompt = promptFromClient(finalPrompt);
+    if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
     let ref = reference;
     if (reference === false) ref = null;
     else if (!ref) ref = await resolveAutoReference(projectId, req.params.id, kind);
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, ref, kind), referenceImageBase64: ref, seed, width, height, promptOptimizer: false });
+    const promptToSend = customPrompt || buildPixelPrompt(prompt, ref, kind);
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, width, height, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-    res.json({ image: imgs[0] });
+    res.json({ image: imgs[0], prompt: promptToSend, promptLength: promptToSend.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -334,17 +343,18 @@ app.post('/api/walks/prompt-preview', async (req, res) => {
 app.post('/api/walks/generate', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
-    const { prompt, reference, seed, dirs, frames, cellSize } = req.body || {};
-    if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const { prompt, reference, seed, dirs, frames, cellSize, finalPrompt } = req.body || {};
+    const customPrompt = promptFromClient(finalPrompt);
+    if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     let ref = reference;
     if (reference === false) ref = null;
     else if (!ref) ref = await walks.firstWalkDataUrl(projectId);
     const cfg = await getConfig();
-    const finalPrompt = buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
-    const imgs = await minimax.generateImage({ model: cfg.model, prompt: finalPrompt, referenceImageBase64: ref, seed, promptOptimizer: false });
+    const promptToSend = customPrompt || buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-    const meta = await walks.saveWalk(projectId, { name: clipText(prompt, 40), prompt, dirs, frames, cellSize, imageBase64: imgs[0] });
-    res.json({ ok: true, meta, image: imgs[0] });
+    const meta = await walks.saveWalk(projectId, { name: clipText(prompt || customPrompt, 40), prompt: prompt || customPrompt, dirs, frames, cellSize, imageBase64: imgs[0] });
+    res.json({ ok: true, meta, image: imgs[0], prompt: promptToSend, promptLength: promptToSend.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -353,12 +363,14 @@ app.post('/api/walks/generate', async (req, res) => {
 // ---------- 通用生成（保留兼容） ----------
 app.post('/api/generate', async (req, res) => {
   try {
-    const { prompt, reference, seed, n, assetKind } = req.body || {};
-    if (!prompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const { prompt, reference, seed, n, assetKind, finalPrompt } = req.body || {};
+    const customPrompt = promptFromClient(finalPrompt);
+    if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
     const cfg = await getConfig();
-    const imgs = await minimax.generateImage({ model: cfg.model, prompt: buildPixelPrompt(prompt, reference, kind), referenceImageBase64: reference, seed, n, promptOptimizer: false });
-    res.json({ images: imgs });
+    const promptToSend = customPrompt || buildPixelPrompt(prompt, reference, kind);
+    const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: reference, seed, n, promptOptimizer: false });
+    res.json({ images: imgs, prompt: promptToSend, promptLength: promptToSend.length });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
