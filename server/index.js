@@ -96,6 +96,10 @@ async function resolveAutoReference(projectId, sheetId, kind) {
   return ref;
 }
 
+function explicitReferenceMarker(reference) {
+  return reference ? '__explicit_reference_selected__' : null;
+}
+
 // ---------- 项目 ----------
 app.get('/api/projects', async (req, res) => {
   res.json(await projects.listProjects());
@@ -185,6 +189,28 @@ app.get('/api/sprites/:id/skill', async (req, res) => {
     res.type('markdown').send(t);
   } catch {
     res.status(404).end();
+  }
+});
+
+app.post('/api/sprites/:id/prompt-preview', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    const { prompt, reference, assetKind } = req.body || {};
+    if (!prompt) return res.json({ ok: true, prompt: '', promptLength: 0, hasReference: false, referenceSource: 'none' });
+    const kind = normalizeAssetKind(assetKind);
+    let ref = explicitReferenceMarker(reference);
+    let referenceSource = ref ? 'explicit' : 'none';
+    if (reference === false) {
+      ref = null;
+      referenceSource = 'none';
+    } else if (!ref) {
+      ref = await resolveAutoReference(projectId, req.params.id, kind);
+      referenceSource = ref ? 'auto' : 'none';
+    }
+    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
+    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, assetKind: kind, hasReference: !!ref, referenceSource });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
@@ -282,6 +308,27 @@ app.get('/api/walks/:id/image', async (req, res) => {
     res.type('png').send(buf);
   } catch {
     res.status(404).end();
+  }
+});
+
+app.post('/api/walks/prompt-preview', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    const { prompt, reference, dirs, frames, cellSize } = req.body || {};
+    if (!prompt) return res.json({ ok: true, prompt: '', promptLength: 0, hasReference: false, referenceSource: 'none' });
+    let ref = explicitReferenceMarker(reference);
+    let referenceSource = ref ? 'explicit' : 'none';
+    if (reference === false) {
+      ref = null;
+      referenceSource = 'none';
+    } else if (!ref) {
+      ref = await walks.firstWalkDataUrl(projectId);
+      referenceSource = ref ? 'auto' : 'none';
+    }
+    const finalPrompt = buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
+    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, hasReference: !!ref, referenceSource });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
