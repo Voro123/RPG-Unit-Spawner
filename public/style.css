@@ -30,6 +30,7 @@ nav a {
   padding: 6px 12px;
   border-radius: 8px;
 }
+nav a[href="/walk.html"] { display: none; }
 nav a:hover, nav a.active { color: var(--text); background: var(--panel2); }
 .container { max-width: 1100px; margin: 0 auto; padding: 24px 20px; }
 h1 { font-size: 22px; margin: 0 0 16px; }
