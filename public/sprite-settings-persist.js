@@ -3,9 +3,6 @@
   let installed = false;
 
   const fieldConfigs = [
-    { id: 'bgTolerance', prop: 'bgTolerance', type: 'value' },
-    { id: 'bgColor', prop: 'bgColor', type: 'value' },
-    { id: 'removeBg', prop: 'removeBg', type: 'checked' },
     { id: 'seed', prop: 'seed', type: 'value' },
     { id: 'newCell', prop: 'newCell', type: 'value' },
     { id: 'newCols', prop: 'newCols', type: 'value' },
