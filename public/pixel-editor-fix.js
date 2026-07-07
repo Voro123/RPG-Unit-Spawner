@@ -1,6 +1,7 @@
 (() => {
   let installed = false;
   let lastLoadedKey = '';
+  let lastAssetKindKey = '';
 
   function $(id) { return document.getElementById(id); }
 
@@ -19,6 +20,58 @@
 
   function selectedGridImageSrc() {
     return selectedCellElement()?.querySelector('img')?.src || '';
+  }
+
+  function projectId() {
+    return localStorage.getItem('rpg-unit-spawner.projectId') || '';
+  }
+
+  function withProject(url) {
+    const pid = projectId();
+    if (!pid) return url;
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}projectId=${encodeURIComponent(pid)}`;
+  }
+
+  async function fetchJson(url) {
+    const headers = projectId() ? { 'x-project-id': projectId() } : {};
+    const r = await fetch(withProject(url), { headers, cache: 'no-store' });
+    return r.json();
+  }
+
+  function inferAssetKindFromCell(cell) {
+    if (cell?.assetKind === 'tile' || cell?.assetKind === 'sprite') return cell.assetKind;
+    const tag = String(cell?.tag || '');
+    if (tag.startsWith('地块：')) return 'tile';
+    if (tag.startsWith('非地块：')) return 'sprite';
+    return '';
+  }
+
+  function setAssetKindRadio(kind) {
+    if (kind !== 'tile' && kind !== 'sprite') return;
+    const radio = document.querySelector(`input[name=assetKind][value="${kind}"]`);
+    if (!radio) return;
+    if (!radio.checked) {
+      radio.checked = true;
+      radio.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  }
+
+  async function syncAssetKindFromSelectedCell({ force = false } = {}) {
+    const sheetId = selectedSheetId();
+    const index = selectedCellIndex();
+    if (!sheetId || index === null) return;
+    const key = `${sheetId}:${index}`;
+    if (!force && key === lastAssetKindKey) return;
+    try {
+      const sheet = await fetchJson(`/api/sprites/${sheetId}`);
+      const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+      const kind = inferAssetKindFromCell(cell);
+      if (kind) {
+        setAssetKindRadio(kind);
+        lastAssetKindKey = key;
+      }
+    } catch { /* ignore */ }
   }
 
   function syncDefaultTransparentTool() {
@@ -161,21 +214,31 @@
     box.open = true;
     syncDefaultTransparentTool();
     setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
+    setTimeout(() => syncAssetKindFromSelectedCell({ force: true }), 120);
 
     const delayedSync = (force = false, delay = 120) => setTimeout(() => syncPixelEditorFromSelection({ force }), delay);
+    const delayedKindSync = (force = false, delay = 120) => setTimeout(() => syncAssetKindFromSelectedCell({ force }), delay);
 
     document.addEventListener('click', (e) => {
-      if (e.target?.closest?.('#grid .cell')) delayedSync(true, 60);
+      if (e.target?.closest?.('#grid .cell')) {
+        delayedSync(true, 60);
+        delayedKindSync(true, 80);
+      }
     }, true);
 
     document.addEventListener('contextmenu', (e) => {
-      if (e.target?.closest?.('#grid .cell')) delayedSync(true, 60);
+      if (e.target?.closest?.('#grid .cell')) {
+        delayedSync(true, 60);
+        delayedKindSync(true, 80);
+      }
     }, true);
 
     document.addEventListener('change', (e) => {
       if (e.target?.id === 'sheetSel') {
         lastLoadedKey = '';
+        lastAssetKindKey = '';
         delayedSync(true, 100);
+        delayedKindSync(true, 120);
       }
       if (e.target?.id === 'removeBg' || e.target?.id === 'bgColor') delayedSync(true, 160);
     }, true);
@@ -192,6 +255,7 @@
     const observer = new MutationObserver(() => {
       moveBgAdjustSection();
       delayedSync(false, 30);
+      delayedKindSync(false, 40);
     });
     observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'src'] });
     return true;
