@@ -58,7 +58,7 @@ async function listWalks(projectId) {
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-async function saveWalk(projectId, { name, prompt, dirs, frames, cellSize, imageBase64 } = {}) {
+async function saveWalk(projectId, { name, characterName, actionType, prompt, dirs, frames, cellSize, imageBase64 } = {}) {
   await ensure(projectId);
   const id = newId();
   const dir = walkDir(projectId, id);
@@ -66,7 +66,9 @@ async function saveWalk(projectId, { name, prompt, dirs, frames, cellSize, image
   await fs.writeFile(imageFile(projectId, id), base64ToBuf(imageBase64));
   const meta = {
     id,
-    name: name || prompt || '未命名行走图',
+    name: name || prompt || characterName || '未命名行走图',
+    characterName: characterName || '',
+    actionType: actionType || 'move',
     prompt: prompt || '',
     dirs: Number(dirs) || 4,
     frames: Number(frames) || 3,
