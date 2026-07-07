@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>行走图生成 · RPG Unit Spawner</title>
   <link rel="stylesheet" href="/style.css" />
+  <style>
+    .walk-card{width:180px;padding:10px;position:relative}
+    .walk-thumb{width:160px;height:160px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.02)}
+    .walk-title{font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .walk-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}.walk-actions button{font-size:12px;padding:5px 8px}
+    .walk-preview{position:fixed;z-index:6000;display:none;pointer-events:none;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;box-shadow:0 14px 48px rgba(0,0,0,.55)}
+    .walk-preview img{width:360px;height:360px;object-fit:contain;image-rendering:pixelated;display:block}.walk-preview div{margin-top:6px;font-size:12px;color:var(--muted);max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  </style>
 </head>
 <body>
   <nav>
@@ -53,9 +61,11 @@
 
     <div class="card">
       <h2 style="margin-top:0">当前项目行走图库</h2>
+      <p class="muted">鼠标悬浮缩略图可查看大图；可对已保存行走图重命名或删除。</p>
       <div id="walkList" class="row"></div>
     </div>
   </div>
+  <div id="walkPreview" class="walk-preview"><img id="walkPreviewImg" /><div id="walkPreviewTitle"></div></div>
 
   <script src="/project.js"></script>
   <script>
@@ -65,6 +75,7 @@
 
     function api(url, opt) { return Project.fetch(url, opt); }
     function walkImageUrl(id) { return Project.withProject(`/api/walks/${id}/image?t=${Date.now()}`); }
+    function esc(s) { return String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
     async function dataUrlFromFile(file) {
       return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
@@ -81,16 +92,45 @@
       if (document.querySelector('input[name=ref]:checked')?.value === 'existing') renderWalkPick();
     }
 
+    function placePreview(e) {
+      const p = $('walkPreview');
+      const pad = 16;
+      let x = e.clientX + pad;
+      let y = e.clientY + pad;
+      const r = p.getBoundingClientRect();
+      if (x + r.width > innerWidth - 8) x = e.clientX - r.width - pad;
+      if (y + r.height > innerHeight - 8) y = innerHeight - r.height - 8;
+      p.style.left = Math.max(8, x) + 'px';
+      p.style.top = Math.max(8, y) + 'px';
+    }
+
+    function bindPreview(root = document) {
+      root.querySelectorAll('.walk-thumb').forEach((img) => {
+        img.onmouseenter = (e) => {
+          $('walkPreviewImg').src = img.src;
+          $('walkPreviewTitle').textContent = img.dataset.title || '';
+          $('walkPreview').style.display = 'block';
+          placePreview(e);
+        };
+        img.onmousemove = placePreview;
+        img.onmouseleave = () => { $('walkPreview').style.display = 'none'; };
+      });
+    }
+
     function renderWalkCard(w, pickable = false) {
       const url = walkImageUrl(w.id);
-      return `<div class="card" style="width:180px;padding:10px">
-        <img src="${url}" data-id="${w.id}" style="width:160px;height:160px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;${pickable ? 'cursor:pointer' : ''}">
-        <div class="muted" style="font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${w.prompt || w.name}">${w.name || w.prompt || w.id}</div>
+      const title = w.name || w.prompt || w.id;
+      return `<div class="card walk-card" data-id="${esc(w.id)}">
+        <img class="walk-thumb" src="${url}" data-id="${esc(w.id)}" data-title="${esc(title)}" style="${pickable ? 'cursor:pointer' : ''}">
+        <div class="muted walk-title" title="${esc(w.prompt || w.name)}">${esc(title)}</div>
+        ${pickable ? '' : `<div class="walk-actions"><button class="ghost rename-walk" data-id="${esc(w.id)}">重命名</button><button class="ghost delete-walk" data-id="${esc(w.id)}">删除</button></div>`}
       </div>`;
     }
 
     function renderWalkList() {
       $('walkList').innerHTML = WALKS.length ? WALKS.map((w) => renderWalkCard(w)).join('') : '<span class="muted">当前项目暂无行走图。</span>';
+      bindWalkActions($('walkList'));
+      bindPreview($('walkList'));
     }
 
     function renderWalkPick() {
@@ -101,6 +141,36 @@
           REF = await dataUrlFromUrl(img.src);
           box.querySelectorAll('img').forEach((x) => (x.style.borderColor = 'var(--border)'));
           img.style.borderColor = 'var(--accent)';
+        };
+      });
+      bindPreview(box);
+    }
+
+    function bindWalkActions(root) {
+      root.querySelectorAll('.rename-walk').forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.dataset.id;
+          const w = WALKS.find((x) => x.id === id);
+          const name = prompt('新的行走图名称', w?.name || w?.prompt || '');
+          if (!name || !name.trim()) return;
+          const r = await api(`/api/walks/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
+          const j = await r.json();
+          if (!j.ok) { $('status').textContent = '重命名失败：' + (j.error || ''); return; }
+          $('status').textContent = '已重命名';
+          await loadWalks();
+        };
+      });
+      root.querySelectorAll('.delete-walk').forEach((btn) => {
+        btn.onclick = async () => {
+          const id = btn.dataset.id;
+          const w = WALKS.find((x) => x.id === id);
+          if (!confirm(`删除行走图「${w?.name || w?.prompt || id}」？此操作不可恢复。`)) return;
+          const r = await api(`/api/walks/${id}`, { method: 'DELETE' });
+          const j = await r.json();
+          if (!j.ok) { $('status').textContent = '删除失败：' + (j.error || ''); return; }
+          if (REF && document.querySelector('input[name=ref]:checked')?.value === 'existing') REF = null;
+          $('status').textContent = '已删除';
+          await loadWalks();
         };
       });
     }
@@ -122,7 +192,7 @@
       }
       if (mode === 'existing') return REF;
       if (mode === 'none') return false;
-      return null; // auto -> backend uses current project's first walk image
+      return null;
     }
 
     async function gen() {
@@ -141,7 +211,8 @@
       const j = await r.json();
       if (!j.ok) { $('status').textContent = '失败：' + (j.error || ''); return; }
       const url = walkImageUrl(j.meta.id);
-      $('results').innerHTML = `<img src="${url}" style="width:256px;height:256px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px">`;
+      $('results').innerHTML = `<img class="walk-thumb" src="${url}" data-title="${esc(j.meta.name || j.meta.prompt)}" style="width:256px;height:256px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px">`;
+      bindPreview($('results'));
       $('status').textContent = '完成 ✓ 已保存到当前项目行走图库';
       await loadWalks();
     }
