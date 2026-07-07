@@ -33,6 +33,16 @@ async function ensure(projectId) {
   await fs.mkdir(walksDir(projectId), { recursive: true });
 }
 
+async function readMeta(projectId, id) {
+  return JSON.parse(await fs.readFile(metaFile(projectId, id), 'utf8'));
+}
+
+async function writeMeta(projectId, id, meta) {
+  await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2), 'utf8');
+  await touchProject(projectId);
+  return meta;
+}
+
 async function listWalks(projectId) {
   await ensure(projectId);
   let dirs = [];
@@ -40,7 +50,7 @@ async function listWalks(projectId) {
   const out = [];
   for (const id of dirs) {
     try {
-      const meta = JSON.parse(await fs.readFile(metaFile(projectId, id), 'utf8'));
+      const meta = await readMeta(projectId, id);
       const stat = await fs.stat(metaFile(projectId, id));
       out.push({ ...meta, updatedAt: stat.mtimeMs });
     } catch { /* skip broken */ }
@@ -64,9 +74,23 @@ async function saveWalk(projectId, { name, prompt, dirs, frames, cellSize, image
     imageRef: 'walk.png',
     createdAt: new Date().toISOString(),
   };
-  await fs.writeFile(metaFile(projectId, id), JSON.stringify(meta, null, 2), 'utf8');
-  await touchProject(projectId);
+  await writeMeta(projectId, id, meta);
   return meta;
+}
+
+async function renameWalk(projectId, id, name) {
+  const meta = await readMeta(projectId, id);
+  const nextName = String(name || '').trim();
+  if (!nextName) throw new Error('NAME_REQUIRED');
+  meta.name = nextName.slice(0, 80);
+  meta.updatedAt = new Date().toISOString();
+  return writeMeta(projectId, id, meta);
+}
+
+async function deleteWalk(projectId, id) {
+  await fs.rm(walkDir(projectId, id), { recursive: true, force: true });
+  await touchProject(projectId);
+  return { ok: true, id };
 }
 
 async function readWalkImage(projectId, id) {
@@ -80,4 +104,4 @@ async function firstWalkDataUrl(projectId) {
   return `data:image/png;base64,${buf.toString('base64')}`;
 }
 
-module.exports = { listWalks, saveWalk, readWalkImage, firstWalkDataUrl };
+module.exports = { listWalks, saveWalk, renameWalk, deleteWalk, readWalkImage, firstWalkDataUrl };
