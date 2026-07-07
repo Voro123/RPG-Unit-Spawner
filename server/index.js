@@ -43,15 +43,14 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
 
   if (kind === 'tile') {
     let final =
-      `Seamless pixel-art terrain/material tile for a Godot TileMap. Material: ${subject}. ` +
-      `This single tile will be repeated many times side-by-side in a large map; it is never used as one standalone picture. ` +
-      `Generate only the middle part of a much larger continuous surface, as if cropped from an infinite texture. ` +
-      `All four edges must continue perfectly into neighboring copies; left connects to right, top connects to bottom. ` +
-      `Every edge and corner must look like ordinary middle texture, with no perimeter, no outline, no dark rim, no grass/bush wall, no corner decoration, no vignette, no frame. ` +
-      `No map-scene composition and no clutter: no bushes, vines, cliffs, walls, stones, rocks, flowers, items, props, paths, shadows, characters, text, UI, border, or blank margin. ` +
-      `Only tiny uniform color/noise variation belonging to the material is allowed. `;
-    if (ref) final += `Reference is style/palette only; ignore its objects, scene layout, perimeter, edge/corner structure, borders, shadows, and clutter. `;
-    final += `Final: one clean infinitely repeatable ${rawSubject} TileMap texture, no visible edges, no extra objects.`;
+      `Pixel-art terrain/material center tile for a Godot TileMap. Material: ${subject}. ` +
+      `This is the plain center tile used in the middle of a large repeated area, not an auto-tile, not a transition tile, not an edge tile, not a border tile, and not a corner tile. ` +
+      `It will be repeated many times, so generate only the ordinary interior of a much larger continuous surface, as if cropped from the middle of an infinite texture. ` +
+      `The outermost pixels on all four sides must look like normal interior texture, not like a boundary. Do not create a perimeter, frame, outline, dark rim, vignette, corner emphasis, surrounding hedge, or ring-shaped shading. ` +
+      `Keep the whole canvas visually even and uniform, with only tiny texture variation belonging to the material itself. ` +
+      `No map-scene composition and no clutter: no bushes, vines, cliffs, walls, stones, rocks, flowers, items, props, paths, shadows, characters, text, UI, border, or blank margin. `;
+    if (ref) final += `Reference is style/palette only; ignore its objects, scene layout, perimeter, transition edges, border structure, shadows, and clutter. `;
+    final += `Final: one clean plain-center ${rawSubject} TileMap texture, infinitely repeatable, with no visible edges and no extra objects.`;
     return capPrompt(final);
   }
 
