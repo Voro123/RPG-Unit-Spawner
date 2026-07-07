@@ -6,12 +6,14 @@
   <title>行走图生成 · RPG Unit Spawner</title>
   <link rel="stylesheet" href="/style.css" />
   <style>
-    .walk-card{width:180px;padding:10px;position:relative}
-    .walk-thumb{width:160px;height:160px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.02)}
+    .walk-card{width:190px;padding:10px;position:relative}
+    .walk-thumb{width:170px;height:170px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background:rgba(255,255,255,.02)}
     .walk-title{font-size:12px;margin-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .walk-sub{font-size:12px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .walk-actions{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}.walk-actions button{font-size:12px;padding:5px 8px}
     .walk-preview{position:fixed;z-index:6000;display:none;pointer-events:none;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:10px;box-shadow:0 14px 48px rgba(0,0,0,.55)}
     .walk-preview img{width:360px;height:360px;object-fit:contain;image-rendering:pixelated;display:block}.walk-preview div{margin-top:6px;font-size:12px;color:var(--muted);max-width:360px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .sheet-note{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:8px}.sheet-note .card{padding:10px}
   </style>
 </head>
 <body>
@@ -26,16 +28,26 @@
     <div id="cfgWarn" class="card err" style="display:none">未配置 MINIMAX，请先到 <a href="/config.html" style="color:var(--accent)">配置页</a> 填写 API Key。</div>
 
     <div class="card">
-      <p class="muted">生成并保存到当前项目。参考图默认使用当前项目下第一张行走图，方便保持角色风格一致。</p>
+      <p class="muted">一次可生成同一角色的多种行走图，也可以只生成其中某一种。参考图默认使用当前项目下第一张行走图，方便保持角色风格一致。</p>
+
+      <label>角色名字</label>
+      <input id="characterName" placeholder="如：艾琳" />
 
       <label>角色描述</label>
       <textarea id="prompt" placeholder="如：像素风勇士，蓝衣，棕色短发，小披风"></textarea>
 
-      <div class="row">
-        <div style="flex:1"><label>方向数</label><select id="dirs"><option>4</option><option>8</option></select></div>
-        <div style="flex:1"><label>每方向帧数</label><select id="frames"><option>3</option><option>4</option></select></div>
-        <div style="flex:1"><label>单帧像素</label><input id="cell" type="number" value="32" min="8" /></div>
+      <label>固定规格</label>
+      <div class="sheet-note">
+        <div class="card"><strong>A. 移动行走图</strong><div class="muted">4 × 4（4方向，每方向4帧）</div></div>
+        <div class="card"><strong>B. 攻击行走图</strong><div class="muted">1 × 6（单排6帧）</div></div>
+        <div class="card"><strong>C. 受击行走图</strong><div class="muted">1 × 3（单排3帧）</div></div>
       </div>
+
+      <input id="dirs" type="hidden" value="4" />
+      <input id="frames" type="hidden" value="4" />
+
+      <label>单帧像素</label>
+      <input id="cell" type="number" value="32" min="8" />
 
       <label>参考图</label>
       <div class="row">
@@ -50,7 +62,13 @@
       <label>随机种子（可选）</label>
       <input id="seed" type="number" placeholder="如：12345" />
 
-      <div class="row" style="margin-top:12px"><button id="genBtn">生成行走图</button><button class="ghost" id="refreshWalks">刷新行走图库</button></div>
+      <div class="row" style="margin-top:12px;flex-wrap:wrap">
+        <button id="genBtn">生成全部三种</button>
+        <button class="ghost" id="genMoveBtn">只生成移动</button>
+        <button class="ghost" id="genAttackBtn">只生成攻击</button>
+        <button class="ghost" id="genHurtBtn">只生成受击</button>
+        <button class="ghost" id="refreshWalks">刷新行走图库</button>
+      </div>
       <div id="status" class="muted" style="margin-top:8px"></div>
     </div>
 
@@ -72,10 +90,16 @@
     const $ = (id) => document.getElementById(id);
     let WALKS = [];
     let REF = null;
+    const ACTION_META = {
+      move: { label: '移动行走图' },
+      attack: { label: '攻击行走图' },
+      hurt: { label: '受击行走图' },
+    };
 
     function api(url, opt) { return Project.fetch(url, opt); }
     function walkImageUrl(id) { return Project.withProject(`/api/walks/${id}/image?t=${Date.now()}`); }
-    function esc(s) { return String(s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+    function esc(s) { return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    function actionLabel(type) { return ACTION_META[type]?.label || type || '未分类'; }
 
     async function dataUrlFromFile(file) {
       return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(file); });
@@ -119,10 +143,12 @@
 
     function renderWalkCard(w, pickable = false) {
       const url = walkImageUrl(w.id);
-      const title = w.name || w.prompt || w.id;
+      const title = w.name || `${w.characterName || '未命名角色'} · ${actionLabel(w.actionType)}`;
+      const sub = `${w.characterName || '未命名角色'} · ${actionLabel(w.actionType)} · ${w.dirs}×${w.frames}`;
       return `<div class="card walk-card" data-id="${esc(w.id)}">
         <img class="walk-thumb" src="${url}" data-id="${esc(w.id)}" data-title="${esc(title)}" style="${pickable ? 'cursor:pointer' : ''}">
-        <div class="muted walk-title" title="${esc(w.prompt || w.name)}">${esc(title)}</div>
+        <div class="muted walk-title" title="${esc(title)}">${esc(title)}</div>
+        <div class="walk-sub" title="${esc(sub)}">${esc(sub)}</div>
         ${pickable ? '' : `<div class="walk-actions"><button class="ghost rename-walk" data-id="${esc(w.id)}">重命名</button><button class="ghost delete-walk" data-id="${esc(w.id)}">删除</button></div>`}
       </div>`;
     }
@@ -151,7 +177,7 @@
         btn.onclick = async () => {
           const id = btn.dataset.id;
           const w = WALKS.find((x) => x.id === id);
-          const name = prompt('新的行走图名称', w?.name || w?.prompt || '');
+          const name = prompt('新的行走图名称', w?.name || `${w?.characterName || ''} · ${actionLabel(w?.actionType)}`);
           if (!name || !name.trim()) return;
           const r = await api(`/api/walks/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
           const j = await r.json();
@@ -164,7 +190,7 @@
         btn.onclick = async () => {
           const id = btn.dataset.id;
           const w = WALKS.find((x) => x.id === id);
-          if (!confirm(`删除行走图「${w?.name || w?.prompt || id}」？此操作不可恢复。`)) return;
+          if (!confirm(`删除行走图「${w?.name || w?.characterName || id}」？此操作不可恢复。`)) return;
           const r = await api(`/api/walks/${id}`, { method: 'DELETE' });
           const j = await r.json();
           if (!j.ok) { $('status').textContent = '删除失败：' + (j.error || ''); return; }
@@ -173,6 +199,15 @@
           await loadWalks();
         };
       });
+    }
+
+    function renderResults(items) {
+      $('results').innerHTML = items.map((item) => {
+        const url = walkImageUrl(item.meta.id);
+        const title = `${item.meta.characterName || ''} · ${actionLabel(item.actionType)}`;
+        return `<div class="card walk-card"><img class="walk-thumb" src="${url}" data-title="${esc(title)}"><div class="walk-title">${esc(title)}</div><div class="walk-sub">${item.sheet?.dirs || item.meta.dirs}×${item.sheet?.frames || item.meta.frames}</div></div>`;
+      }).join('');
+      bindPreview($('results'));
     }
 
     document.querySelectorAll('input[name=ref]').forEach((r) => {
@@ -195,29 +230,30 @@
       return null;
     }
 
-    async function gen() {
+    async function gen(actionType) {
+      const characterName = $('characterName').value.trim();
       const prompt = $('prompt').value.trim();
-      if (!prompt) { $('status').textContent = '请填写角色描述'; return; }
+      if (!characterName) { $('status').textContent = '请填写角色名字'; return; }
       const seed = $('seed').value ? Number($('seed').value) : undefined;
-      const dirs = Number($('dirs').value);
-      const frames = Number($('frames').value);
-      const cellSize = Number($('cell').value);
+      const cellSize = Number($('cell').value) || 32;
       const reference = await resolveReference();
-      $('status').textContent = '生成中…';
+      $('status').textContent = actionType === 'all' ? '正在依次生成全部三种行走图…' : `正在生成${actionLabel(actionType)}…`;
       const r = await api('/api/walks/generate', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, reference, seed, dirs, frames, cellSize }),
+        body: JSON.stringify({ characterName, prompt, reference, seed, cellSize, actionType }),
       });
       const j = await r.json();
       if (!j.ok) { $('status').textContent = '失败：' + (j.error || ''); return; }
-      const url = walkImageUrl(j.meta.id);
-      $('results').innerHTML = `<img class="walk-thumb" src="${url}" data-title="${esc(j.meta.name || j.meta.prompt)}" style="width:256px;height:256px;object-fit:contain;image-rendering:pixelated;border:1px solid var(--border);border-radius:8px">`;
-      bindPreview($('results'));
-      $('status').textContent = '完成 ✓ 已保存到当前项目行走图库';
+      const items = Array.isArray(j.items) ? j.items : [j];
+      renderResults(items);
+      $('status').textContent = actionType === 'all' ? '完成 ✓ 已生成并保存三种行走图' : `完成 ✓ 已保存${actionLabel(actionType)}`;
       await loadWalks();
     }
 
-    $('genBtn').onclick = gen;
+    $('genBtn').onclick = () => gen('all');
+    $('genMoveBtn').onclick = () => gen('move');
+    $('genAttackBtn').onclick = () => gen('attack');
+    $('genHurtBtn').onclick = () => gen('hurt');
     $('refreshWalks').onclick = loadWalks;
 
     (async () => {
