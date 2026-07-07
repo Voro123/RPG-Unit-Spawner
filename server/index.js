@@ -16,9 +16,50 @@ const BG_COLOR = '#FFFFFF';
 const TILE_IMAGE_SIZE = 1024;
 const MAX_MINIMAX_PROMPT_CHARS = 1400;
 const MAX_SUBJECT_CHARS = 260;
+const WALK_SHEET_TYPES = {
+  move: {
+    key: 'move',
+    label: '移动行走图',
+    dirs: 4,
+    frames: 4,
+    layout: '4 rows by 4 columns',
+    purpose: 'walking movement animation',
+    details: 'Show 4 directions: down, left, right, up. Each row is one direction and each column is one frame of the walk cycle.',
+  },
+  attack: {
+    key: 'attack',
+    label: '攻击行走图',
+    dirs: 1,
+    frames: 6,
+    layout: '1 row by 6 columns',
+    purpose: 'attack animation',
+    details: 'Show a single-direction attack action sequence in one horizontal strip with 6 frames.',
+  },
+  hurt: {
+    key: 'hurt',
+    label: '受击行走图',
+    dirs: 1,
+    frames: 3,
+    layout: '1 row by 3 columns',
+    purpose: 'hurt reaction animation',
+    details: 'Show a single-direction getting-hit reaction in one horizontal strip with 3 frames.',
+  },
+};
 
 function normalizeAssetKind(assetKind) {
   return assetKind === 'tile' ? 'tile' : 'sprite';
+}
+
+function normalizeWalkActionType(actionType) {
+  return WALK_SHEET_TYPES[actionType] ? actionType : 'move';
+}
+
+function walkSheetConfig(actionType) {
+  return WALK_SHEET_TYPES[normalizeWalkActionType(actionType)];
+}
+
+function walkActionTypes(actionType) {
+  return actionType === 'all' ? ['move', 'attack', 'hurt'] : [normalizeWalkActionType(actionType)];
 }
 
 function clipText(text, maxLen = MAX_SUBJECT_CHARS) {
@@ -89,14 +130,22 @@ async function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   return capPrompt(final);
 }
 
-function buildWalkPrompt({ prompt, dirs = 4, frames = 3, cellSize = 32, ref }) {
+function buildWalkPrompt({ characterName, prompt, actionType = 'move', cellSize = 32, ref }) {
+  const cfg = walkSheetConfig(actionType);
+  const who = clipText(characterName || 'Unnamed character', 80);
+  const desc = clipText(prompt || '', 240);
   let out =
-    `Pixel art walking animation sprite sheet for a 2D top-down RPG. Character: ${clipText(prompt)}. ` +
-    `${Number(dirs) || 4} directions, ${Number(frames) || 3} frames per direction, each frame about ${Number(cellSize) || 32}px. ` +
-    `Arrange frames in a clean grid, directions by rows, frames by columns. ` +
-    `Consistent character design, same scale, centered in each frame, no text, no UI, no frame borders, no blur, no gradients. ` +
+    `Pixel art sprite sheet for a 2D top-down RPG. ` +
+    `Character name: ${who}. ` +
+    `${desc ? `Character design: ${desc}. ` : ''}` +
+    `Generate a ${cfg.purpose}. ` +
+    `${cfg.details} ` +
+    `Arrange the sheet as ${cfg.layout}. ` +
+    `Each frame about ${Number(cellSize) || 32}px. ` +
+    `Keep the same character identity, outfit, hair, colors, silhouette, and proportions across every frame. ` +
+    `Readable top-down RPG game asset, visible square pixels, no blur, no gradients, no text, no UI, no frame numbers. ` +
     `Transparent background if possible; otherwise plain solid white background. `;
-  if (ref) out += `Reference is for the same character design/style only; preserve identity and outfit while making the walk sheet. `;
+  if (ref) out += `Reference is for the same character design/style only; preserve identity and outfit while making this ${cfg.label}. `;
   return capPrompt(out);
 }
 
@@ -107,8 +156,6 @@ async function requireProjectId(req) {
 }
 
 async function resolveAutoReference(projectId, sheetId, kind) {
-  // 地块自动参考旧地块容易把旧图的边缘/角落继续复制出来，
-  // 所以地块默认不自动找参考图；用户显式上传或手选参考图时仍然会使用 reference。
   if (kind === 'tile') return null;
 
   let ref = await sprites.firstImageDataUrlByKind(projectId, sheetId, kind);
@@ -120,7 +167,6 @@ function explicitReferenceMarker(reference) {
   return reference ? '__explicit_reference_selected__' : null;
 }
 
-// ---------- 项目 ----------
 app.get('/api/projects', async (req, res) => {
   res.json(await projects.listProjects());
 });
@@ -133,7 +179,6 @@ app.post('/api/projects', async (req, res) => {
   }
 });
 
-// ---------- 配置 ----------
 app.get('/api/config', async (req, res) => {
   const c = await getConfig();
   res.json({
@@ -163,7 +208,6 @@ app.post('/api/config', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ---------- 精灵图管理 ----------
 app.get('/api/sprites', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
@@ -327,7 +371,6 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
   }
 });
 
-// ---------- 行走图 ----------
 app.get('/api/walks', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
@@ -371,8 +414,9 @@ app.delete('/api/walks/:id', async (req, res) => {
 app.post('/api/walks/prompt-preview', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
-    const { prompt, reference, dirs, frames, cellSize } = req.body || {};
-    if (!prompt) return res.json({ ok: true, prompt: '', promptLength: 0, hasReference: false, referenceSource: 'none' });
+    const { prompt, characterName, reference, actionType, cellSize } = req.body || {};
+    if (!characterName && !prompt) return res.json({ ok: true, prompt: '', promptLength: 0, hasReference: false, referenceSource: 'none' });
+    const singleAction = normalizeWalkActionType(actionType);
     let ref = explicitReferenceMarker(reference);
     let referenceSource = ref ? 'explicit' : 'none';
     if (reference === false) {
@@ -382,8 +426,10 @@ app.post('/api/walks/prompt-preview', async (req, res) => {
       ref = await walks.firstWalkDataUrl(projectId);
       referenceSource = ref ? 'auto' : 'none';
     }
-    const finalPrompt = buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
-    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, hasReference: !!ref, referenceSource });
+    const finalPrompt = buildWalkPrompt({ characterName, prompt, actionType: singleAction, cellSize, ref });
+    const cfg = await getConfig();
+    const args = { model: cfg.model, prompt: finalPrompt, referenceImageBase64: ref, promptOptimizer: false };
+    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, hasReference: !!ref, referenceSource, actionType: singleAction, sheet: walkSheetConfig(singleAction), minimaxRequest: requestPreview(args) });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -392,25 +438,57 @@ app.post('/api/walks/prompt-preview', async (req, res) => {
 app.post('/api/walks/generate', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
-    const { prompt, reference, seed, dirs, frames, cellSize, finalPrompt } = req.body || {};
-    const customPrompt = promptFromClient(finalPrompt);
-    if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
+    const { prompt, characterName, reference, seed, cellSize, actionType, finalPrompt } = req.body || {};
+    const who = clipText(characterName, 80);
+    if (!who) return res.status(400).json({ error: 'CHARACTER_NAME_REQUIRED' });
+    const types = walkActionTypes(actionType);
+    const customPrompt = types.length === 1 ? promptFromClient(finalPrompt) : null;
     let ref = reference;
     if (reference === false) ref = null;
     else if (!ref) ref = await walks.firstWalkDataUrl(projectId);
     const cfg = await getConfig();
-    const promptToSend = customPrompt || buildWalkPrompt({ prompt, dirs, frames, cellSize, ref });
-    const args = { model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, promptOptimizer: false };
-    const imgs = await minimax.generateImage(args);
-    if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-    const meta = await walks.saveWalk(projectId, { name: clipText(prompt || customPrompt, 40), prompt: prompt || customPrompt, dirs, frames, cellSize, imageBase64: imgs[0] });
-    res.json({ ok: true, meta, image: imgs[0], prompt: promptToSend, promptLength: promptToSend.length, minimaxRequest: requestPreview(args) });
+    const items = [];
+    let rollingReference = ref;
+
+    for (const type of types) {
+      const sheet = walkSheetConfig(type);
+      const promptToSend = customPrompt || buildWalkPrompt({ characterName: who, prompt, actionType: type, cellSize, ref: rollingReference });
+      const args = { model: cfg.model, prompt: promptToSend, referenceImageBase64: rollingReference, seed, promptOptimizer: false };
+      const imgs = await minimax.generateImage(args);
+      if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
+      const meta = await walks.saveWalk(projectId, {
+        name: `${who} · ${sheet.label}`,
+        characterName: who,
+        actionType: type,
+        prompt: prompt || '',
+        dirs: sheet.dirs,
+        frames: sheet.frames,
+        cellSize,
+        imageBase64: imgs[0],
+      });
+      items.push({
+        ok: true,
+        actionType: type,
+        sheet,
+        meta,
+        image: imgs[0],
+        prompt: promptToSend,
+        promptLength: promptToSend.length,
+        minimaxRequest: requestPreview(args),
+      });
+      rollingReference = `data:image/png;base64,${imgs[0]}`;
+    }
+
+    if (items.length === 1) {
+      const item = items[0];
+      return res.json({ ok: true, ...item });
+    }
+    res.json({ ok: true, characterName: who, items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ---------- 通用生成（保留兼容） ----------
 app.post('/api/generate', async (req, res) => {
   try {
     const { prompt, reference, seed, n, assetKind, finalPrompt } = req.body || {};
