@@ -4,13 +4,21 @@
 
   function $(id) { return document.getElementById(id); }
 
+  function selectedCellElement() {
+    return document.querySelector('#grid .cell.selected');
+  }
+
   function selectedCellIndex() {
-    const el = document.querySelector('#grid .cell.selected');
+    const el = selectedCellElement();
     return el ? Number(el.dataset.i) : null;
   }
 
   function selectedSheetId() {
     return $('sheetSel')?.value || '';
+  }
+
+  function selectedGridImageSrc() {
+    return selectedCellElement()?.querySelector('img')?.src || '';
   }
 
   function syncDefaultTransparentTool() {
@@ -22,17 +30,72 @@
     if (swatch) swatch.style.background = 'transparent';
   }
 
-  function forceLoadSelectedCell({ force = false } = {}) {
+  async function loadImage(src) {
+    const img = new Image();
+    img.decoding = 'async';
+    return await new Promise((resolve, reject) => {
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  async function syncPixelEditorFromSelection({ force = false } = {}) {
     const box = $('pixelEditorBox');
-    const loadBtn = $('loadPixelBtn');
+    const canvas = $('pixelEditorCanvas');
+    const meta = $('pixelEditorMeta');
     const sheetId = selectedSheetId();
     const index = selectedCellIndex();
-    if (!box || !loadBtn || !sheetId || index === null) return;
+    if (!box || !canvas || !sheetId || index === null) return;
     box.open = true;
-    const key = `${sheetId}:${index}`;
+
+    const src = selectedGridImageSrc();
+    const key = `${sheetId}:${index}:${src}`;
     if (!force && key === lastLoadedKey) return;
     lastLoadedKey = key;
-    loadBtn.click();
+
+    canvas.dataset.sheetId = sheetId;
+    canvas.dataset.index = String(index);
+    canvas.dataset.tag = $('tagEdit')?.value || '';
+
+    if (!src) {
+      const w = canvas.width || 32;
+      const h = canvas.height || 32;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+      if (meta) meta.textContent = `格子 ${index} 没有图片。`;
+      return;
+    }
+
+    try {
+      const img = await loadImage(src);
+      const w = img.naturalWidth || img.width || canvas.width || 32;
+      const h = img.naturalHeight || img.height || canvas.height || 32;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+      if (meta) meta.textContent = `已载入：格子 ${index} · ${w}×${h}。当前画布会跟随相近色预览同步；左键画，右键吸色。`;
+    } catch {
+      if (meta) meta.textContent = `格子 ${index} 图片载入失败。`;
+    }
+  }
+
+  function moveBgAdjustSection() {
+    const box = $('pixelEditorBox');
+    const section = $('bgAdjustSection');
+    if (!box || !section) return;
+    let host = $('pixelBgAdjustHost');
+    if (!host) {
+      host = document.createElement('div');
+      host.id = 'pixelBgAdjustHost';
+      host.className = 'pixel-bg-adjust-host';
+      host.innerHTML = `<div class="pixel-editor-divider"></div><h3 class="pixel-bg-adjust-title">相近色 / 背景处理</h3>`;
+      box.appendChild(host);
+    }
+    if (section.parentElement !== host) host.appendChild(section);
   }
 
   function injectFloatingStyle() {
@@ -62,6 +125,11 @@
       #pixelEditorBox .pixel-editor-meta{margin-top:8px;}
       #pixelEditorBox .pixel-editor-tools{gap:6px;}
       #pixelEditorBox .pixel-editor-tools button{padding:6px 9px;}
+      #pixelBgAdjustHost{margin-top:12px;}
+      #pixelBgAdjustHost .pixel-editor-divider{height:1px;background:var(--border);margin:12px 0;}
+      #pixelBgAdjustHost .pixel-bg-adjust-title{margin:0 0 8px 0;font-size:15px;}
+      #bgAdjustSection{margin-top:0!important;}
+      #bgAdjustSection label:first-child{margin-top:0;}
       @media(max-width:900px){
         #pixelEditorBox.pixel-editor-box{position:static;width:auto;max-width:none;max-height:none;margin-top:16px!important;}
         #pixelEditorBox .pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);max-height:none;}
@@ -74,33 +142,47 @@
     if (installed) return true;
     const box = $('pixelEditorBox');
     const grid = $('grid');
-    if (!box || !grid || !$('loadPixelBtn')) return false;
+    if (!box || !grid || !$('pixelEditorCanvas')) return false;
     installed = true;
 
     injectFloatingStyle();
+    moveBgAdjustSection();
     box.open = true;
     syncDefaultTransparentTool();
-    setTimeout(() => forceLoadSelectedCell({ force: true }), 80);
+    setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
 
-    const delayedLoad = (force = false) => setTimeout(() => forceLoadSelectedCell({ force }), 120);
+    const delayedSync = (force = false, delay = 120) => setTimeout(() => syncPixelEditorFromSelection({ force }), delay);
 
     document.addEventListener('click', (e) => {
-      if (e.target?.closest?.('#grid .cell')) delayedLoad(true);
+      if (e.target?.closest?.('#grid .cell')) delayedSync(true, 60);
     }, true);
 
     document.addEventListener('contextmenu', (e) => {
-      if (e.target?.closest?.('#grid .cell')) delayedLoad(true);
+      if (e.target?.closest?.('#grid .cell')) delayedSync(true, 60);
     }, true);
 
     document.addEventListener('change', (e) => {
       if (e.target?.id === 'sheetSel') {
         lastLoadedKey = '';
-        delayedLoad(true);
+        delayedSync(true, 100);
       }
+      if (e.target?.id === 'removeBg' || e.target?.id === 'bgColor') delayedSync(true, 160);
     }, true);
 
-    const observer = new MutationObserver(() => delayedLoad(false));
-    observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    document.addEventListener('input', (e) => {
+      if (e.target?.id === 'bgTolerance') delayedSync(true, 160);
+    }, true);
+
+    document.addEventListener('click', (e) => {
+      if (e.target?.id === 'applyBgBtn' || e.target?.closest?.('#applyBgBtn')) delayedSync(true, 220);
+      if (e.target?.id === 'loadPixelBtn' || e.target?.closest?.('#loadPixelBtn')) delayedSync(true, 30);
+    }, true);
+
+    const observer = new MutationObserver(() => {
+      moveBgAdjustSection();
+      delayedSync(false, 30);
+    });
+    observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'src'] });
     return true;
   }
 
