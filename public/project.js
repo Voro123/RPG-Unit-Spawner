@@ -7,6 +7,7 @@
   let generationTargetIndex = null;
   let deferredSelectedIndex = null;
   let selectionLockInstalled = false;
+  let assetKindRestoreInstalled = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -264,6 +265,46 @@
     });
     radios.forEach((r) => r.addEventListener('change', sync));
     sync();
+  }
+
+  function inferAssetKindFromCell(cell) {
+    if (cell?.assetKind === 'tile' || cell?.assetKind === 'sprite') return cell.assetKind;
+    const tag = String(cell?.tag || '');
+    if (tag.startsWith('地块：')) return 'tile';
+    if (tag.startsWith('非地块：')) return 'sprite';
+    return '';
+  }
+
+  function setAssetKindRadio(kind) {
+    if (kind !== 'tile' && kind !== 'sprite') return;
+    const radio = document.querySelector(`input[name=assetKind][value="${kind}"]`);
+    if (!radio || radio.checked) return;
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  async function syncAssetKindForSelectedCell() {
+    const sheetId = selectedSheetId();
+    const index = selectedCellIndex();
+    if (!sheetId || index === null) return;
+    try {
+      const sheet = await rawJson(`/api/sprites/${sheetId}`);
+      const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+      const kind = inferAssetKindFromCell(cell);
+      if (kind) setAssetKindRadio(kind);
+    } catch { /* ignore */ }
+  }
+
+  function installAssetKindRestore() {
+    if (assetKindRestoreInstalled) return;
+    assetKindRestoreInstalled = true;
+    document.addEventListener('click', (e) => {
+      if (e.target?.closest?.('#grid .cell')) setTimeout(syncAssetKindForSelectedCell, 100);
+    });
+    document.addEventListener('change', (e) => {
+      if (e.target?.id === 'sheetSel') setTimeout(syncAssetKindForSelectedCell, 180);
+    });
+    setTimeout(syncAssetKindForSelectedCell, 500);
   }
 
   function isAbortError(e) { return e && (e.name === 'AbortError' || e.code === DOMException.ABORT_ERR); }
@@ -696,6 +737,7 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     installSpriteBackgroundKindGuard();
+    installAssetKindRestore();
     installCancelableGenerationButtons();
     installPromptPreviewPane();
     installPixelEditor();
