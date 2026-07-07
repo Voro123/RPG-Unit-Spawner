@@ -14,6 +14,18 @@
     return `${url}${sep}projectId=${enc(currentProjectId)}`;
   }
 
+  function isGenerationEndpoint(url) {
+    return /\/api\/sprites\/[^/]+\/cells\/[^/]+\/(generate|replace)$/.test(url)
+      || /\/api\/sprites\/[^/]+\/generate-raw$/.test(url)
+      || url === '/api/walks/generate'
+      || url === '/api/generate';
+  }
+
+  function currentEditableFinalPrompt() {
+    const t = $('promptPreviewText');
+    return t ? t.value.trim() : '';
+  }
+
   async function api(url, opt = {}) {
     const method = (opt.method || 'GET').toUpperCase();
     const headers = { ...(opt.headers || {}) };
@@ -28,7 +40,8 @@
     if (headers['Content-Type'] === 'application/json' && body) {
       try {
         const json = JSON.parse(body);
-        body = JSON.stringify({ ...json, projectId: currentProjectId });
+        const finalPrompt = isGenerationEndpoint(url) ? currentEditableFinalPrompt() : '';
+        body = JSON.stringify({ ...json, projectId: currentProjectId, ...(finalPrompt ? { finalPrompt } : {}) });
       } catch { /* keep body */ }
     }
 
@@ -45,7 +58,7 @@
       .project-overlay{position:fixed;inset:0;z-index:5000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:24px}
       .project-modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;box-shadow:0 14px 60px rgba(0,0,0,.5)}
       .prompt-preview-box{margin-top:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}
-      .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}
+      .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}.prompt-preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
       @media(max-width:760px){.project-bar{position:static;margin:10px 12px}.project-bar select{width:100%}}
     `;
     document.head.appendChild(s);
@@ -234,13 +247,25 @@
     return null;
   }
 
-  async function refreshPromptPreview() {
+  function updateManualPromptMeta() {
+    const textarea = $('promptPreviewText');
+    const meta = $('promptPreviewMeta');
+    if (!textarea || !meta) return;
+    meta.textContent = `手动编辑中 · 长度 ${textarea.value.trim().length}/1500 · 生成时将发送此框内容`;
+  }
+
+  async function refreshPromptPreview({ force = false } = {}) {
     const textarea = $('promptPreviewText');
     const meta = $('promptPreviewMeta');
     if (!textarea || !meta || !currentProjectId) return;
+    if (textarea.dataset.manual === '1' && !force) {
+      updateManualPromptMeta();
+      return;
+    }
     const payload = promptPreviewPayload();
     if (!payload || !payload.body.prompt || payload.url.includes('/undefined/')) {
       textarea.value = '';
+      textarea.dataset.manual = '0';
       meta.textContent = '填写提示词后显示最终 prompt。';
       return;
     }
@@ -253,17 +278,19 @@
       });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || '预览失败');
+      textarea.dataset.manual = '0';
       textarea.value = j.prompt || '';
-      meta.textContent = `长度 ${j.promptLength || 0}/1500 · 参考图：${j.hasReference ? j.referenceSource : 'none'}`;
+      meta.textContent = `自动生成 · 长度 ${j.promptLength || 0}/1500 · 参考图：${j.hasReference ? j.referenceSource : 'none'} · 可直接修改后生成`;
     } catch (e) {
       textarea.value = '';
+      textarea.dataset.manual = '0';
       meta.textContent = '预览失败：' + (e.message || e);
     }
   }
 
-  function schedulePromptPreview() {
+  function schedulePromptPreview({ force = false } = {}) {
     clearTimeout(promptPreviewTimer);
-    promptPreviewTimer = setTimeout(refreshPromptPreview, 180);
+    promptPreviewTimer = setTimeout(() => refreshPromptPreview({ force }), 180);
   }
 
   function installPromptPreviewPane() {
@@ -274,10 +301,22 @@
     details.id = 'promptPreviewBox';
     details.className = 'prompt-preview-box';
     details.innerHTML = `
-      <summary>查看本次将发送给 AI 的最终提示词</summary>
-      <textarea id="promptPreviewText" readonly placeholder="填写提示词后显示最终 prompt"></textarea>
+      <summary>查看 / 修改本次将发送给 AI 的最终提示词</summary>
+      <div class="prompt-preview-actions">
+        <button type="button" class="ghost" id="refreshPromptPreviewBtn">按当前参数重新生成提示词</button>
+        <span class="muted">修改下方内容后，生成时会直接发送修改后的文本。</span>
+      </div>
+      <textarea id="promptPreviewText" placeholder="填写提示词后显示最终 prompt；也可以直接在这里编辑要发给 AI 的内容"></textarea>
       <div id="promptPreviewMeta" class="prompt-preview-meta">填写提示词后显示最终 prompt。</div>`;
     anchor.parentElement.insertBefore(details, anchor.nextSibling);
+
+    const textarea = $('promptPreviewText');
+    textarea.dataset.manual = '0';
+    textarea.addEventListener('input', () => {
+      textarea.dataset.manual = '1';
+      updateManualPromptMeta();
+    });
+    $('refreshPromptPreviewBtn').onclick = () => schedulePromptPreview({ force: true });
 
     const selectors = ['prompt', 'sheetSel', 'dirs', 'frames', 'cell', 'refUpload'];
     selectors.forEach((id) => {
