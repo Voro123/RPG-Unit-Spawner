@@ -37,46 +37,64 @@
 
   function restoreField(cfg, settings) {
     const el = $(cfg.id);
-    if (!el || !hasOwn(settings, cfg.prop)) return;
+    if (!el || !hasOwn(settings, cfg.prop)) return false;
+    if (el.dataset.persistRestored === '1') return false;
     if (cfg.type === 'checked') el.checked = !!settings[cfg.prop];
     else el.value = String(settings[cfg.prop]);
+    el.dataset.persistRestored = '1';
+    return true;
   }
 
   function saveField(cfg) {
     const el = $(cfg.id);
     if (!el) return;
+    el.dataset.persistRestored = '1';
     writeSettings({ [cfg.prop]: cfg.type === 'checked' ? !!el.checked : el.value });
   }
 
   function restoreRadio(cfg, settings) {
-    if (!hasOwn(settings, cfg.prop)) return;
+    if (!hasOwn(settings, cfg.prop)) return false;
     const el = document.querySelector(`input[name="${cfg.name}"][value="${settings[cfg.prop]}"]`);
-    if (el) el.checked = true;
+    if (!el || el.dataset.persistRestored === '1') return false;
+    el.checked = true;
+    document.querySelectorAll(`input[name="${cfg.name}"]`).forEach((r) => (r.dataset.persistRestored = '1'));
+    return true;
   }
 
   function saveRadio(cfg) {
     const el = document.querySelector(`input[name="${cfg.name}"]:checked`);
-    if (el) writeSettings({ [cfg.prop]: el.value });
+    if (el) {
+      document.querySelectorAll(`input[name="${cfg.name}"]`).forEach((r) => (r.dataset.persistRestored = '1'));
+      writeSettings({ [cfg.prop]: el.value });
+    }
   }
 
-  function dispatchRestoredChanges() {
-    ['bgTolerance', 'bgColor', 'removeBg', 'seed', 'newCell', 'newCols', 'newRows', 'pixelColor', 'pixelAlpha', 'pixelTransparent'].forEach((id) => {
+  function dispatchChangesForRestored(restoredFields, restoredRadios) {
+    restoredFields.forEach((id) => {
       const el = $(id);
       if (!el) return;
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
-    radioConfigs.forEach((cfg) => {
-      const el = document.querySelector(`input[name="${cfg.name}"]:checked`);
+    restoredRadios.forEach((name) => {
+      const el = document.querySelector(`input[name="${name}"]:checked`);
       if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
     });
   }
 
-  function restoreAll() {
+  function restoreNewControlsOnly() {
     const settings = readSettings();
-    fieldConfigs.forEach((cfg) => restoreField(cfg, settings));
-    radioConfigs.forEach((cfg) => restoreRadio(cfg, settings));
-    setTimeout(dispatchRestoredChanges, 0);
+    const restoredFields = [];
+    const restoredRadios = [];
+    fieldConfigs.forEach((cfg) => {
+      if (restoreField(cfg, settings)) restoredFields.push(cfg.id);
+    });
+    radioConfigs.forEach((cfg) => {
+      if (restoreRadio(cfg, settings)) restoredRadios.push(cfg.name);
+    });
+    if (restoredFields.length || restoredRadios.length) {
+      setTimeout(() => dispatchChangesForRestored(restoredFields, restoredRadios), 0);
+    }
   }
 
   function bindAll() {
@@ -100,12 +118,12 @@
   function install() {
     if (installed) return;
     installed = true;
-    restoreAll();
+    restoreNewControlsOnly();
     bindAll();
 
     const observer = new MutationObserver(() => {
-      restoreAll();
       bindAll();
+      restoreNewControlsOnly();
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
