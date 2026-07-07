@@ -24,6 +24,31 @@ function clipText(text, maxLen = MAX_SUBJECT_CHARS) {
   return s.length > maxLen ? s.slice(0, maxLen) : s;
 }
 
+function splitPromptTokens(text) {
+  return String(text || '')
+    .split(/[，,、;；\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function uniq(list) {
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    const v = String(item || '').trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(v);
+  }
+  return out;
+}
+
+function hasCJK(text) {
+  return /[\u3400-\u9fff]/.test(String(text || ''));
+}
+
 function expandSpriteSubject(subject) {
   const s = clipText(subject);
   if (/^(花|花朵|小花|flower|flowers)$/i.test(s)) {
@@ -41,23 +66,154 @@ function promptFromClient(finalPrompt) {
   return p ? capPrompt(p) : null;
 }
 
+function parseTileIntent(promptText) {
+  const raw = clipText(promptText);
+  const tokens = splitPromptTokens(raw);
+  const joined = tokens.join(' ');
+
+  const materials = [
+    {
+      key: 'grass',
+      regex: /(草地|草坪|grass|lawn|meadow)/i,
+      label: 'grass',
+      coverage: 'grass',
+      only: 'grass surface',
+      detail: 'Lush green natural grass field, dense natural grass blades with subtle color variation.',
+      palette: 'fresh bright green color palette',
+      negativeRemove: [],
+    },
+    {
+      key: 'dirt',
+      regex: /(泥地|土地|土壤|dirt|soil|earth)/i,
+      label: 'dirt',
+      coverage: 'dirt',
+      only: 'dirt ground surface',
+      detail: 'Natural dirt ground surface with subtle soil variation and compact earth texture.',
+      palette: 'earthy brown natural color palette',
+      negativeRemove: ['dirt'],
+    },
+    {
+      key: 'sand',
+      regex: /(沙地|沙漠|sand)/i,
+      label: 'sand',
+      coverage: 'sand',
+      only: 'sand surface',
+      detail: 'Fine natural sand surface with subtle grain variation and clean desert-like texture.',
+      palette: 'warm sandy natural color palette',
+      negativeRemove: [],
+    },
+    {
+      key: 'stone',
+      regex: /(石地|石板|石砖|石头地|stone|rock|cobblestone|pavement)/i,
+      label: 'stone ground',
+      coverage: 'stone ground',
+      only: 'stone surface',
+      detail: 'Clean stone ground texture with subtle material variation and orderly surface detail.',
+      palette: 'clean natural stone color palette',
+      negativeRemove: ['rocks', 'stones'],
+    },
+    {
+      key: 'water',
+      regex: /(水面|水地|河面|湖面|water|river|lake)/i,
+      label: 'water',
+      coverage: 'water',
+      only: 'water surface',
+      detail: 'Clean water surface texture with subtle natural variation and smooth repeating flow pattern.',
+      palette: 'fresh blue natural color palette',
+      negativeRemove: ['water'],
+    },
+    {
+      key: 'snow',
+      regex: /(雪地|snow|ice)/i,
+      label: 'snow',
+      coverage: 'snow',
+      only: 'snow surface',
+      detail: 'Soft snow ground texture with subtle snow variation and crisp clean surface detail.',
+      palette: 'clean cool white-blue color palette',
+      negativeRemove: [],
+    },
+    {
+      key: 'wood',
+      regex: /(木地板|木板|木头|wood|plank)/i,
+      label: 'wood plank ground',
+      coverage: 'wood plank ground',
+      only: 'wood plank surface',
+      detail: 'Hand-painted wood plank texture with subtle grain variation and clean repeating board pattern.',
+      palette: 'warm natural wood color palette',
+      negativeRemove: [],
+    },
+  ];
+
+  let material = materials.find((m) => m.regex.test(joined));
+  if (!material) {
+    const fallback = hasCJK(joined) ? 'terrain surface' : (joined || 'terrain surface');
+    material = {
+      key: 'generic',
+      label: fallback,
+      coverage: fallback,
+      only: fallback,
+      detail: `Clean ${fallback} texture with subtle natural variation and consistent repeating surface detail.`,
+      palette: 'clean game-friendly color palette',
+      negativeRemove: [],
+    };
+  }
+
+  const styleParts = [];
+  if (/(清新动漫风|动漫风|anime|jrpg)/i.test(joined)) {
+    styleParts.push('Clean anime illustration style', 'JRPG game asset', 'soft cel-shaded look', 'hand-painted texture');
+  } else if (/(像素风|像素|pixel)/i.test(joined)) {
+    styleParts.push('Pixel art style', 'RPG game asset');
+  } else {
+    styleParts.push('RPG game asset', 'hand-painted texture');
+  }
+
+  if (/(清新|fresh|bright)/i.test(joined)) {
+    styleParts.push(material.palette);
+  } else if (!styleParts.includes(material.palette) && material.key === 'grass') {
+    styleParts.push(material.palette);
+  }
+
+  const negativeBase = [
+    'flowers', 'rocks', 'trees', 'stones', 'mushrooms', 'paths', 'dirt', 'water', 'items', 'characters', 'animals',
+    'text', 'watermark', 'signature', 'border', 'frame', 'edge artifacts', 'visible seams', 'hard edges',
+    'shadows', 'highlights', 'vignette', 'perspective', '3d render', 'photorealistic', 'blurry', 'low quality',
+  ];
+  const negative = uniq(negativeBase.filter((item) => !material.negativeRemove.includes(item)));
+
+  return {
+    material,
+    styleLine: uniq(styleParts).join(', '),
+    negativeLine: negative.join(', '),
+  };
+}
+
+function buildTilePrompt(promptText, ref) {
+  const tile = parseTileIntent(promptText);
+  let final =
+    `Seamless tileable ${tile.material.label} tile texture, repeating pattern, edge-to-edge ${tile.material.coverage} coverage with content extending to all four borders. ` +
+    `Top-down orthographic view, bird's-eye perspective. ` +
+    `${tile.styleLine}. ` +
+    `${tile.material.detail} ` +
+    `Only ${tile.material.only}, no other elements, no props, no flowers, no rocks, no trees, no paths, no items, no characters, no water, no text, no UI, no watermark, no signature, no borders, no frames, no vignette. ` +
+    `No visible edges, no borders, no seams, perfect tile edges, all four sides blending seamlessly. ` +
+    `Uniform flat ambient lighting, even light from all directions, no shadows, no highlights, no directional light source. ` +
+    `Perfectly continuous pattern, edges blend seamlessly when tiled.`;
+
+  if (ref) {
+    final += ` Reference image is style and palette only; keep the tile fully seamless and do not copy any props, borders, frames, edge artifacts, seams, shadows, or unrelated objects.`;
+  }
+
+  final += ` Negative Prompt: ${tile.negativeLine}.`;
+  return capPrompt(final);
+}
+
 function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
   const rawSubject = clipText(promptText);
   const subject = kind === 'sprite' ? expandSpriteSubject(rawSubject) : rawSubject;
 
   if (kind === 'tile') {
-    let final =
-      `Seamless tileable ${subject} tile texture, repeating pattern. ` +
-      `Top-down view, orthographic, bird's-eye view. ` +
-      `RPG game asset, tile map. ` +
-      `Edge-to-edge ${subject} coverage. ` +
-      `Only ${subject}, no other elements, no props, no flowers, no rocks, no paths, no items, no characters, no text. ` +
-      `No visible edges, no borders, no seams. ` +
-      `Uniform lighting, even ambient light, no shadows. ` +
-      `High detail, clean tile texture.`;
-    if (ref) final += ` Reference image is style and palette only; keep seamless tileable repeating pattern and do not copy any props, borders, edges, seams, shadows, or non-${subject} elements.`;
-    return capPrompt(final);
+    return buildTilePrompt(promptText, ref);
   }
 
   let final =
