@@ -48,14 +48,15 @@ function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
 
   if (kind === 'tile') {
     let final =
-      `Pixel-art terrain/material center tile for a Godot TileMap. Material: ${subject}. ` +
-      `This is the plain center tile used in the middle of a large repeated area, not an auto-tile, not a transition tile, not an edge tile, not a border tile, and not a corner tile. ` +
-      `It will be repeated many times, so generate only the ordinary interior of a much larger continuous surface, as if cropped from the middle of an infinite texture. ` +
-      `The outermost pixels on all four sides must look like normal interior texture, not like a boundary. Do not create a perimeter, frame, outline, dark rim, vignette, corner emphasis, surrounding hedge, or ring-shaped shading. ` +
-      `Keep the whole canvas visually even and uniform, with only tiny texture variation belonging to the material itself. ` +
-      `No map-scene composition and no clutter: no bushes, vines, cliffs, walls, stones, rocks, flowers, items, props, paths, shadows, characters, text, UI, border, or blank margin. `;
-    if (ref) final += `Reference is style/palette only; ignore its objects, scene layout, perimeter, transition edges, border structure, shadows, and clutter. `;
-    final += `Final: one clean plain-center ${rawSubject} TileMap texture, infinitely repeatable, with no visible edges and no extra objects.`;
+      `Seamless tileable ${subject} tile texture, repeating pattern. ` +
+      `Top-down view, orthographic, bird's-eye view. ` +
+      `RPG game asset, tile map. ` +
+      `Edge-to-edge ${subject} coverage. ` +
+      `Only ${subject}, no other elements, no props, no flowers, no rocks, no paths, no items, no characters, no text. ` +
+      `No visible edges, no borders, no seams. ` +
+      `Uniform lighting, even ambient light, no shadows. ` +
+      `High detail, clean tile texture.`;
+    if (ref) final += ` Reference image is style and palette only; keep seamless tileable repeating pattern and do not copy any props, borders, edges, seams, shadows, or non-${subject} elements.`;
     return capPrompt(final);
   }
 
@@ -91,7 +92,7 @@ async function requireProjectId(req) {
 }
 
 async function resolveAutoReference(projectId, sheetId, kind) {
-  // 地块在 TileMap 中会反复拼接使用。自动参考旧地块容易把旧图的边缘/角落继续复制出来，
+  // 地块自动参考旧地块容易把旧图的边缘/角落继续复制出来，
   // 所以地块默认不自动找参考图；用户显式上传或手选参考图时仍然会使用 reference。
   if (kind === 'tile') return null;
 
