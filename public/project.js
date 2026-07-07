@@ -17,13 +17,96 @@
   function isGenerationEndpoint(url) {
     return /\/api\/sprites\/[^/]+\/cells\/[^/]+\/(generate|replace)$/.test(url)
       || /\/api\/sprites\/[^/]+\/generate-raw$/.test(url)
-      || url === '/api/walks/generate'
       || url === '/api/generate';
+  }
+
+  function cellGenerationMatch(url) {
+    return /\/api\/sprites\/([^/]+)\/cells\/([^/]+)\/(generate|replace)$/.exec(url || '');
   }
 
   function currentEditableFinalPrompt() {
     const t = $('promptPreviewText');
     return t ? t.value.trim() : '';
+  }
+
+  async function rawJson(url, opt = {}) {
+    const headers = { ...(opt.headers || {}) };
+    if (currentProjectId) headers['x-project-id'] = currentProjectId;
+    const r = await fetch(opt.method === 'GET' || !opt.method ? withProject(url) : url, { ...opt, headers });
+    return r.json();
+  }
+
+  async function loadImageFromBlobUrl(url) {
+    const blob = await (await fetch(url, { cache: 'no-store' })).blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = objectUrl;
+      });
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+    }
+  }
+
+  async function loadImageFromDataUrl(dataUrl) {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+  }
+
+  function canvasToBase64(canvas) {
+    return canvas.toDataURL('image/png').split(',')[1];
+  }
+
+  function drawImageToCellCanvas(img, size) {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.clearRect(0, 0, size, size);
+    ctx.drawImage(img, 0, 0, size, size);
+    return canvas;
+  }
+
+  async function resizeCellImageToSheetSize(sheetId, index, meta) {
+    const sheet = meta?.cellSize ? meta : await rawJson(`/api/sprites/${sheetId}`);
+    const size = Math.max(1, Number(sheet.cellSize) || 32);
+    const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+    if (!cell?.imageRef) return meta || sheet;
+    const img = await loadImageFromBlobUrl(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`));
+    if ((img.naturalWidth || img.width) === size && (img.naturalHeight || img.height) === size) return meta || sheet;
+    const canvas = drawImageToCellCanvas(img, size);
+    const tag = cell.tag || '';
+    const updated = await rawJson(`/api/sprites/${sheetId}/cells/${index}/image`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: canvasToBase64(canvas), tag, projectId: currentProjectId }),
+    });
+    return updated.ok ? updated.meta : (meta || sheet);
+  }
+
+  async function maybePostprocessCellGeneration(url, response) {
+    const m = cellGenerationMatch(url);
+    if (!m) return response;
+    const text = await response.text();
+    let json;
+    try { json = JSON.parse(text); } catch { return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers }); }
+    if (json?.ok && json.meta) {
+      try {
+        json.meta = await resizeCellImageToSheetSize(m[1], m[2], json.meta);
+        json.postprocessedSize = json.meta?.cellSize || null;
+      } catch (e) {
+        json.postprocessError = e.message || String(e);
+      }
+    }
+    return new Response(JSON.stringify(json), { status: response.status, statusText: response.statusText, headers: { 'Content-Type': 'application/json' } });
   }
 
   async function api(url, opt = {}) {
@@ -45,7 +128,8 @@
       } catch { /* keep body */ }
     }
 
-    return fetch(url, { ...opt, headers, body, signal });
+    const response = await fetch(url, { ...opt, headers, body, signal });
+    return maybePostprocessCellGeneration(url, response);
   }
 
   function injectStyle() {
@@ -59,6 +143,7 @@
       .project-modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;box-shadow:0 14px 60px rgba(0,0,0,.5)}
       .prompt-preview-box{margin-top:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}
       .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}.prompt-preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+      .pixel-editor-box{margin-top:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}.pixel-editor-box summary{cursor:pointer;font-weight:700}.pixel-editor-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.pixel-editor-tools input[type=color]{width:44px;height:34px;padding:2px;margin:0}.pixel-editor-tools input[type=number]{width:92px}.pixel-editor-stage{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background-color:#20242e;background-image:linear-gradient(45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.16) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.16) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;cursor:crosshair}.pixel-editor-meta{font-size:12px;color:var(--muted);min-width:200px;line-height:1.7}.pixel-editor-swatch{display:inline-block;width:16px;height:16px;border:1px solid var(--border);vertical-align:middle;margin-right:4px}
       @media(max-width:760px){.project-bar{position:static;margin:10px 12px}.project-bar select{width:100%}}
     `;
     document.head.appendChild(s);
@@ -90,7 +175,7 @@
     div.innerHTML = `
       <div class="project-modal">
         <h1 style="margin-top:0">创建第一个项目</h1>
-        <p class="muted">项目会隔离精灵图、行走图等运行时数据。开始前请先创建一个项目。</p>
+        <p class="muted">项目会隔离精灵图等运行时数据。开始前请先创建一个项目。</p>
         <label>项目名称</label>
         <input id="firstProjectName" placeholder="如：像素城镇 RPG" />
         <div class="row" style="margin-top:14px"><button id="createFirstProject">创建项目</button><span id="firstProjectStatus" class="muted"></span></div>
@@ -223,7 +308,7 @@
     const mode = document.querySelector('input[name=ref]:checked')?.value || 'auto';
     if (mode === 'none') return false;
     if (mode === 'upload') return !!$('refUpload')?.files?.length;
-    if (mode === 'sub' || mode === 'existing') return true;
+    if (mode === 'sub') return true;
     return null;
   }
 
@@ -235,13 +320,6 @@
         kind: 'sprite',
         url: `/api/sprites/${$('sheetSel').value}/prompt-preview`,
         body: { prompt, reference, assetKind: document.querySelector('input[name=assetKind]:checked')?.value || 'sprite' },
-      };
-    }
-    if ($('dirs') && $('frames') && $('cell')) {
-      return {
-        kind: 'walk',
-        url: '/api/walks/prompt-preview',
-        body: { prompt, reference, dirs: Number($('dirs').value), frames: Number($('frames').value), cellSize: Number($('cell').value) },
       };
     }
     return null;
@@ -318,7 +396,7 @@
     });
     $('refreshPromptPreviewBtn').onclick = () => schedulePromptPreview({ force: true });
 
-    const selectors = ['prompt', 'sheetSel', 'dirs', 'frames', 'cell', 'refUpload'];
+    const selectors = ['prompt', 'sheetSel', 'refUpload'];
     selectors.forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener('input', schedulePromptPreview);
@@ -326,10 +404,140 @@
     });
     document.querySelectorAll('input[name=assetKind],input[name=ref]').forEach((el) => el.addEventListener('change', schedulePromptPreview));
     document.addEventListener('click', (e) => {
-      if (e.target?.closest?.('#subPick,#walkPick')) schedulePromptPreview();
+      if (e.target?.closest?.('#subPick')) schedulePromptPreview();
     });
     details.addEventListener('toggle', () => { if (details.open) refreshPromptPreview(); });
     schedulePromptPreview();
+  }
+
+  function selectedSheetId() { return $('sheetSel')?.value || ''; }
+  function selectedCellIndex() { const el = document.querySelector('#grid .cell.selected'); return el ? Number(el.dataset.i) : null; }
+
+  function pixelEditorState() {
+    const canvas = $('pixelEditorCanvas');
+    return canvas ? { canvas, ctx: canvas.getContext('2d') } : null;
+  }
+
+  function setPixelMeta(text) { if ($('pixelEditorMeta')) $('pixelEditorMeta').textContent = text; }
+
+  async function loadSelectedPixelCell() {
+    const sheetId = selectedSheetId();
+    const index = selectedCellIndex();
+    const st = pixelEditorState();
+    if (!st || !sheetId || index === null) { setPixelMeta('请先选择一个有图片的格子。'); return; }
+    const sheet = await rawJson(`/api/sprites/${sheetId}`);
+    const size = Number(sheet.cellSize) || 32;
+    const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+    if (!cell?.imageRef) { st.canvas.width = size; st.canvas.height = size; st.ctx.clearRect(0, 0, size, size); setPixelMeta(`格子 ${index} 没有图片。`); return; }
+    const img = await loadImageFromBlobUrl(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`));
+    st.canvas.width = size;
+    st.canvas.height = size;
+    st.ctx.imageSmoothingEnabled = false;
+    st.ctx.clearRect(0, 0, size, size);
+    st.ctx.drawImage(img, 0, 0, size, size);
+    st.canvas.dataset.sheetId = sheetId;
+    st.canvas.dataset.index = String(index);
+    st.canvas.dataset.tag = cell.tag || '';
+    setPixelMeta(`已载入：格子 ${index} · ${size}×${size}。点击或拖动即可改单个像素。`);
+  }
+
+  function hexToRgb(hex) {
+    const n = parseInt(String(hex || '#000000').replace('#', ''), 16) || 0;
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+  }
+
+  function paintPixelFromEvent(e) {
+    const st = pixelEditorState();
+    if (!st || !st.canvas.width) return;
+    const rect = st.canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / rect.width * st.canvas.width);
+    const y = Math.floor((e.clientY - rect.top) / rect.height * st.canvas.height);
+    if (x < 0 || y < 0 || x >= st.canvas.width || y >= st.canvas.height) return;
+    const transparent = $('pixelTransparent')?.checked;
+    const rgb = hexToRgb($('pixelColor')?.value || '#000000');
+    const alpha = transparent ? 0 : Math.max(0, Math.min(255, Number($('pixelAlpha')?.value || 255)));
+    const img = st.ctx.getImageData(x, y, 1, 1);
+    img.data[0] = rgb.r; img.data[1] = rgb.g; img.data[2] = rgb.b; img.data[3] = alpha;
+    st.ctx.putImageData(img, x, y);
+    const sw = $('pixelCurrentSwatch');
+    if (sw) sw.style.background = alpha ? `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha / 255})` : 'transparent';
+    setPixelMeta(`像素 (${x}, ${y}) = rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`);
+  }
+
+  function pickPixelFromEvent(e) {
+    const st = pixelEditorState();
+    if (!st || !st.canvas.width) return;
+    const rect = st.canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / rect.width * st.canvas.width);
+    const y = Math.floor((e.clientY - rect.top) / rect.height * st.canvas.height);
+    if (x < 0 || y < 0 || x >= st.canvas.width || y >= st.canvas.height) return;
+    const d = st.ctx.getImageData(x, y, 1, 1).data;
+    $('pixelColor').value = '#' + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+    $('pixelAlpha').value = String(d[3]);
+    $('pixelTransparent').checked = d[3] === 0;
+    setPixelMeta(`已吸取像素 (${x}, ${y}) = rgba(${d[0]}, ${d[1]}, ${d[2]}, ${d[3]})`);
+  }
+
+  async function savePixelEditorCell() {
+    const st = pixelEditorState();
+    const sheetId = st?.canvas?.dataset?.sheetId;
+    const index = st?.canvas?.dataset?.index;
+    if (!st || !sheetId || index === undefined) { setPixelMeta('没有可保存的像素图。'); return; }
+    const tag = $('tagEdit')?.value ?? st.canvas.dataset.tag ?? '';
+    const r = await api(`/api/sprites/${sheetId}/cells/${index}/image`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: canvasToBase64(st.canvas), tag }),
+    });
+    const j = await r.json();
+    if (!j.ok) { setPixelMeta('保存失败：' + (j.error || '')); return; }
+    setPixelMeta(`已保存格子 ${index} 的像素修改。`);
+    const img = document.querySelector(`#grid .cell.selected img`);
+    if (img) img.src = withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`);
+    if ($('opStatus')) $('opStatus').textContent = '像素修改已保存';
+  }
+
+  function installPixelEditor() {
+    if ($('pixelEditorBox') || !$('grid') || !$('tagEdit')) return;
+    const card = $('tagEdit').closest('.card') || $('grid').closest('.card');
+    if (!card) return;
+    const box = document.createElement('details');
+    box.id = 'pixelEditorBox';
+    box.className = 'pixel-editor-box';
+    box.innerHTML = `
+      <summary>像素编辑器 / 生成后尺寸修正</summary>
+      <p class="muted">生成到单格后会自动重采样为当前精灵图 cellSize×cellSize。这里可对选中格逐像素二次编辑，支持透明像素。</p>
+      <div class="pixel-editor-tools">
+        <button type="button" class="ghost" id="loadPixelBtn">载入选中格</button>
+        <button type="button" class="ghost" id="savePixelBtn">保存像素修改</button>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">颜色 <input id="pixelColor" type="color" value="#000000"></label>
+        <label style="margin:0;display:flex;align-items:center;gap:6px">Alpha <input id="pixelAlpha" type="number" min="0" max="255" value="255"></label>
+        <label style="margin:0"><input id="pixelTransparent" type="checkbox" style="width:auto;margin-right:6px">透明</label>
+        <span class="muted"><span id="pixelCurrentSwatch" class="pixel-editor-swatch"></span>左键画，右键吸色</span>
+      </div>
+      <div class="pixel-editor-stage">
+        <canvas id="pixelEditorCanvas" class="pixel-editor-canvas" width="32" height="32"></canvas>
+        <div class="pixel-editor-meta" id="pixelEditorMeta">选择一个有图片的格子后点击“载入选中格”。</div>
+      </div>`;
+    card.appendChild(box);
+
+    let painting = false;
+    const canvas = $('pixelEditorCanvas');
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      if (e.button === 2) { pickPixelFromEvent(e); return; }
+      painting = true;
+      paintPixelFromEvent(e);
+    });
+    canvas.addEventListener('mousemove', (e) => { if (painting) paintPixelFromEvent(e); });
+    document.addEventListener('mouseup', () => { painting = false; });
+    $('loadPixelBtn').onclick = loadSelectedPixelCell;
+    $('savePixelBtn').onclick = savePixelEditorCell;
+    document.addEventListener('click', (e) => {
+      if (e.target?.closest?.('#grid .cell')) setTimeout(() => { if ($('pixelEditorBox')?.open) loadSelectedPixelCell(); }, 80);
+    });
+    box.addEventListener('toggle', () => { if (box.open) loadSelectedPixelCell(); });
   }
 
   async function init({ requireProject = true } = {}) {
@@ -351,6 +559,7 @@
     installSpriteBackgroundKindGuard();
     installCancelableGenerationButtons();
     installPromptPreviewPane();
+    installPixelEditor();
   });
 
   window.Project = {
