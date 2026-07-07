@@ -3,6 +3,7 @@
   let currentProjectId = '';
   let projectsCache = [];
   let activeGeneration = null;
+  let promptPreviewTimer = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -43,6 +44,8 @@
       .project-bar select{width:180px;margin:0;padding:7px 10px}.project-bar button{padding:7px 10px}
       .project-overlay{position:fixed;inset:0;z-index:5000;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;padding:24px}
       .project-modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;box-shadow:0 14px 60px rgba(0,0,0,.5)}
+      .prompt-preview-box{margin-top:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}
+      .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}
       @media(max-width:760px){.project-bar{position:static;margin:10px 12px}.project-bar select{width:100%}}
     `;
     document.head.appendChild(s);
@@ -133,17 +136,13 @@
     const elements = [bgTitle, removeRow, toleranceLabel, bgTolerance, previewRow, note];
     const controls = [removeBg, bgColor, bgTolerance, applyBtn];
 
-    function visible(el, on) {
-      if (el) el.style.display = on ? '' : 'none';
-    }
+    function visible(el, on) { if (el) el.style.display = on ? '' : 'none'; }
 
     function sync() {
       const kind = document.querySelector('input[name=assetKind]:checked')?.value || 'sprite';
       const isSprite = kind === 'sprite';
       if (isSprite) {
-        if (removeBg.dataset.spriteChecked !== undefined) {
-          removeBg.checked = removeBg.dataset.spriteChecked === 'true';
-        }
+        if (removeBg.dataset.spriteChecked !== undefined) removeBg.checked = removeBg.dataset.spriteChecked === 'true';
       } else {
         removeBg.dataset.spriteChecked = String(removeBg.checked);
         removeBg.checked = false;
@@ -161,9 +160,7 @@
     sync();
   }
 
-  function isAbortError(e) {
-    return e && (e.name === 'AbortError' || e.code === DOMException.ABORT_ERR);
-  }
+  function isAbortError(e) { return e && (e.name === 'AbortError' || e.code === DOMException.ABORT_ERR); }
 
   function installCancelableGenerationButtons() {
     const candidates = [
@@ -190,9 +187,7 @@
         const controller = new AbortController();
         activeGeneration = { controller, button: btn };
         btn.textContent = item.label;
-        for (const other of buttons) {
-          if (other.el !== btn) other.el.disabled = true;
-        }
+        for (const other of buttons) if (other.el !== btn) other.el.disabled = true;
 
         try {
           await originalClick.call(btn, event);
@@ -203,14 +198,99 @@
             throw e;
           }
         } finally {
-          if (activeGeneration?.controller === controller) {
-            activeGeneration = null;
-          }
+          if (activeGeneration?.controller === controller) activeGeneration = null;
           btn.textContent = originalText;
           for (const other of buttons) other.el.disabled = false;
         }
       };
     }
+  }
+
+  function currentRefForPreview() {
+    const mode = document.querySelector('input[name=ref]:checked')?.value || 'auto';
+    if (mode === 'none') return false;
+    if (mode === 'upload') return !!$('refUpload')?.files?.length;
+    if (mode === 'sub' || mode === 'existing') return true;
+    return null;
+  }
+
+  function promptPreviewPayload() {
+    const prompt = $('prompt')?.value?.trim() || '';
+    const reference = currentRefForPreview();
+    if ($('sheetSel') && document.querySelector('input[name=assetKind]')) {
+      return {
+        kind: 'sprite',
+        url: `/api/sprites/${$('sheetSel').value}/prompt-preview`,
+        body: { prompt, reference, assetKind: document.querySelector('input[name=assetKind]:checked')?.value || 'sprite' },
+      };
+    }
+    if ($('dirs') && $('frames') && $('cell')) {
+      return {
+        kind: 'walk',
+        url: '/api/walks/prompt-preview',
+        body: { prompt, reference, dirs: Number($('dirs').value), frames: Number($('frames').value), cellSize: Number($('cell').value) },
+      };
+    }
+    return null;
+  }
+
+  async function refreshPromptPreview() {
+    const textarea = $('promptPreviewText');
+    const meta = $('promptPreviewMeta');
+    if (!textarea || !meta || !currentProjectId) return;
+    const payload = promptPreviewPayload();
+    if (!payload || !payload.body.prompt || payload.url.includes('/undefined/')) {
+      textarea.value = '';
+      meta.textContent = '填写提示词后显示最终 prompt。';
+      return;
+    }
+    meta.textContent = '刷新中…';
+    try {
+      const r = await api(payload.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload.body),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || '预览失败');
+      textarea.value = j.prompt || '';
+      meta.textContent = `长度 ${j.promptLength || 0}/1500 · 参考图：${j.hasReference ? j.referenceSource : 'none'}`;
+    } catch (e) {
+      textarea.value = '';
+      meta.textContent = '预览失败：' + (e.message || e);
+    }
+  }
+
+  function schedulePromptPreview() {
+    clearTimeout(promptPreviewTimer);
+    promptPreviewTimer = setTimeout(refreshPromptPreview, 180);
+  }
+
+  function installPromptPreviewPane() {
+    if ($('promptPreviewBox') || !$('prompt')) return;
+    const anchor = $('opStatus') || $('status') || $('seed') || $('prompt');
+    if (!anchor?.parentElement) return;
+    const details = document.createElement('details');
+    details.id = 'promptPreviewBox';
+    details.className = 'prompt-preview-box';
+    details.innerHTML = `
+      <summary>查看本次将发送给 AI 的最终提示词</summary>
+      <textarea id="promptPreviewText" readonly placeholder="填写提示词后显示最终 prompt"></textarea>
+      <div id="promptPreviewMeta" class="prompt-preview-meta">填写提示词后显示最终 prompt。</div>`;
+    anchor.parentElement.insertBefore(details, anchor.nextSibling);
+
+    const selectors = ['prompt', 'sheetSel', 'dirs', 'frames', 'cell', 'refUpload'];
+    selectors.forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener('input', schedulePromptPreview);
+      if (el) el.addEventListener('change', schedulePromptPreview);
+    });
+    document.querySelectorAll('input[name=assetKind],input[name=ref]').forEach((el) => el.addEventListener('change', schedulePromptPreview));
+    document.addEventListener('click', (e) => {
+      if (e.target?.closest?.('#subPick,#walkPick')) schedulePromptPreview();
+    });
+    details.addEventListener('toggle', () => { if (details.open) refreshPromptPreview(); });
+    schedulePromptPreview();
   }
 
   async function init({ requireProject = true } = {}) {
@@ -224,12 +304,14 @@
     currentProjectId = list.some((p) => p.id === saved) ? saved : list[0].id;
     localStorage.setItem(KEY, currentProjectId);
     renderBar();
+    schedulePromptPreview();
     return currentProjectId;
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     installSpriteBackgroundKindGuard();
     installCancelableGenerationButtons();
+    installPromptPreviewPane();
   });
 
   window.Project = {
