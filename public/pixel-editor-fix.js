@@ -30,6 +30,14 @@
     if (swatch) swatch.style.background = 'transparent';
   }
 
+  function ensureBulkEnhancerScript() {
+    if ($('pixelEditorBulkBgScript')) return;
+    const script = document.createElement('script');
+    script.id = 'pixelEditorBulkBgScript';
+    script.src = '/pixel-editor-bulk-bg.js';
+    document.head.appendChild(script);
+  }
+
   async function loadImage(src) {
     const img = new Image();
     img.decoding = 'async';
@@ -147,6 +155,7 @@
 
     injectFloatingStyle();
     moveBgAdjustSection();
+    ensureBulkEnhancerScript();
     box.open = true;
     syncDefaultTransparentTool();
     setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
