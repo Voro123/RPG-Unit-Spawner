@@ -59,12 +59,12 @@
     }
   }
 
-  async function loadImageFromDataUrl(dataUrl) {
-    return await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = reject;
-      img.src = dataUrl;
+  function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || '').split(',')[1] || '');
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
     });
   }
 
@@ -151,7 +151,7 @@
       .project-modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;box-shadow:0 14px 60px rgba(0,0,0,.5)}
       .prompt-preview-box{margin-top:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}
       .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}.prompt-preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-      .pixel-editor-box{margin-top:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}.pixel-editor-box summary{cursor:pointer;font-weight:700}.pixel-editor-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.pixel-editor-tools input[type=color]{width:44px;height:34px;padding:2px;margin:0}.pixel-editor-tools input[type=number]{width:92px}.pixel-editor-stage{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background-color:#20242e;background-image:linear-gradient(45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.16) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.16) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;cursor:crosshair}.pixel-editor-meta{font-size:12px;color:var(--muted);min-width:200px;line-height:1.7}.pixel-editor-swatch{display:inline-block;width:16px;height:16px;border:1px solid var(--border);vertical-align:middle;margin-right:4px}
+      .pixel-editor-box,.cell-copy-box{margin-top:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}.pixel-editor-box summary,.cell-copy-box summary{cursor:pointer;font-weight:700}.pixel-editor-tools,.cell-copy-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.pixel-editor-tools input[type=color]{width:44px;height:34px;padding:2px;margin:0}.pixel-editor-tools input[type=number]{width:92px}.pixel-editor-stage{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background-color:#20242e;background-image:linear-gradient(45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.16) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.16) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;cursor:crosshair}.pixel-editor-meta,.cell-copy-meta{font-size:12px;color:var(--muted);line-height:1.7}.pixel-editor-swatch{display:inline-block;width:16px;height:16px;border:1px solid var(--border);vertical-align:middle;margin-right:4px}.cell-copy-box input[type=text]{min-width:260px;flex:1}
       @media(max-width:760px){.project-bar{position:static;margin:10px 12px}.project-bar select{width:100%}}
     `;
     document.head.appendChild(s);
@@ -342,9 +342,7 @@
           if (activeGeneration?.controller === controller) activeGeneration = null;
           btn.textContent = originalText;
           for (const other of buttons) other.el.disabled = false;
-          if (pendingSelection !== null && typeof window.selectCell === 'function') {
-            setTimeout(() => window.selectCell(pendingSelection), 0);
-          }
+          if (pendingSelection !== null && typeof window.selectCell === 'function') setTimeout(() => window.selectCell(pendingSelection), 0);
         }
       };
     }
@@ -457,7 +455,7 @@
   }
 
   function selectedSheetId() { return $('sheetSel')?.value || ''; }
-  function selectedCellIndex() { const el = document.querySelector('#grid .cell.selected'); return el ? Number(el.dataset.i) : null; }
+  function selectedCellIndex() { return domSelectedCellIndex(); }
 
   function pixelEditorState() {
     const canvas = $('pixelEditorCanvas');
@@ -465,6 +463,7 @@
   }
 
   function setPixelMeta(text) { if ($('pixelEditorMeta')) $('pixelEditorMeta').textContent = text; }
+  function setCopyMeta(text) { if ($('cellCopyMeta')) $('cellCopyMeta').textContent = text; }
 
   async function loadSelectedPixelCell() {
     const sheetId = selectedSheetId();
@@ -586,6 +585,100 @@
     box.addEventListener('toggle', () => { if (box.open) loadSelectedPixelCell(); });
   }
 
+  function parseCellTargets(text, maxIndex) {
+    const out = new Set();
+    String(text || '').split(/[，,\s]+/).forEach((part) => {
+      if (!part) return;
+      const range = /^(\d+)\s*-\s*(\d+)$/.exec(part);
+      if (range) {
+        const a = Number(range[1]), b = Number(range[2]);
+        const start = Math.min(a, b), end = Math.max(a, b);
+        for (let i = start; i <= end; i++) if (i >= 0 && i <= maxIndex) out.add(i);
+        return;
+      }
+      const n = Number(part);
+      if (Number.isInteger(n) && n >= 0 && n <= maxIndex) out.add(n);
+    });
+    return [...out];
+  }
+
+  function regionTargetIndices(sourceIndex) {
+    return [...document.querySelectorAll('#grid .cell.region')]
+      .map((el) => Number(el.dataset.i))
+      .filter((i) => Number.isInteger(i) && i !== sourceIndex);
+  }
+
+  async function sourceCellImageBase64(sheetId, sourceIndex) {
+    const r = await fetch(withProject(`/api/sprites/${sheetId}/cells/${sourceIndex}?t=${Date.now()}`), { cache: 'no-store' });
+    if (!r.ok) throw new Error('源格没有可复制的图片');
+    return blobToBase64(await r.blob());
+  }
+
+  function numberedTag(baseTag, n, total) {
+    const clean = String(baseTag || '').replace(/\s*\(\d+\/\d+\)\s*$/, '');
+    return total > 1 ? `${clean}(${n}/${total})` : clean;
+  }
+
+  async function copySelectedCellToTargets(mode) {
+    const sheetId = selectedSheetId();
+    const sourceIndex = selectedCellIndex();
+    if (!sheetId || sourceIndex === null) { setCopyMeta('请先选择一个有图片的源格。'); return; }
+    const sheet = await rawJson(`/api/sprites/${sheetId}`);
+    const sourceCell = sheet.cells?.find?.((c) => Number(c.index) === Number(sourceIndex));
+    if (!sourceCell?.imageRef) { setCopyMeta(`源格 ${sourceIndex} 没有图片。`); return; }
+
+    let targets = [];
+    if (mode === 'empty') {
+      targets = sheet.cells.filter((c) => !c.imageRef && Number(c.index) !== Number(sourceIndex)).map((c) => Number(c.index));
+    } else {
+      const maxIndex = Math.max(...sheet.cells.map((c) => Number(c.index)));
+      targets = parseCellTargets($('copyTargetCells')?.value || '', maxIndex);
+      if (!targets.length) targets = regionTargetIndices(sourceIndex);
+      targets = targets.filter((i) => i !== sourceIndex && sheet.cells.some((c) => Number(c.index) === i));
+    }
+    targets = [...new Set(targets)];
+    if (!targets.length) { setCopyMeta('没有目标格。可拖选区域，或输入如 1,2,5-8。'); return; }
+
+    const image = await sourceCellImageBase64(sheetId, sourceIndex);
+    const autoNumber = $('copyNumberTags')?.checked !== false;
+    setCopyMeta(`正在复制格子 ${sourceIndex} 到 ${targets.length} 个目标格…`);
+    for (let i = 0; i < targets.length; i++) {
+      const tag = autoNumber ? numberedTag(sourceCell.tag || '', i + 1, targets.length) : (sourceCell.tag || '');
+      const r = await api(`/api/sprites/${sheetId}/cells/${targets[i]}/image`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image, tag }),
+      });
+      const j = await r.json();
+      if (!j.ok) throw new Error(j.error || `复制到格子 ${targets[i]} 失败`);
+    }
+    setCopyMeta(`完成 ✓ 已复制到：${targets.join(', ')}`);
+    if ($('opStatus')) $('opStatus').textContent = `已复制图块内容到 ${targets.length} 个格子`;
+    $('refreshBtn')?.click?.();
+  }
+
+  function installCellCopyTools() {
+    if ($('cellCopyBox') || !$('grid') || !$('tagEdit')) return;
+    const card = $('tagEdit').closest('.card') || $('grid').closest('.card');
+    if (!card) return;
+    const box = document.createElement('details');
+    box.id = 'cellCopyBox';
+    box.className = 'cell-copy-box';
+    box.innerHTML = `
+      <summary>自动复制图块内容到其他格</summary>
+      <p class="muted">选择一个已有图片的源格后，可拖选目标区域，或输入目标格号，把源格图片复制到其他格子。适合重复地块、同款装饰、批量占位。</p>
+      <div class="cell-copy-tools">
+        <input id="copyTargetCells" type="text" placeholder="目标格号：如 1,2,5-8；留空则使用拖选区域" />
+        <button type="button" class="ghost" id="copyToTargetsBtn">复制到目标</button>
+        <button type="button" class="ghost" id="copyToEmptyBtn">复制到所有空格</button>
+        <label style="margin:0"><input id="copyNumberTags" type="checkbox" checked style="width:auto;margin-right:6px">Tag 自动编号</label>
+      </div>
+      <div id="cellCopyMeta" class="cell-copy-meta">源格=当前选中格；目标=输入格号或拖选区域。</div>`;
+    card.appendChild(box);
+    $('copyToTargetsBtn').onclick = async () => { try { await copySelectedCellToTargets('targets'); } catch (e) { setCopyMeta('复制失败：' + (e.message || e)); } };
+    $('copyToEmptyBtn').onclick = async () => { try { await copySelectedCellToTargets('empty'); } catch (e) { setCopyMeta('复制失败：' + (e.message || e)); } };
+  }
+
   async function init({ requireProject = true } = {}) {
     injectStyle();
     const list = await loadProjects();
@@ -606,6 +699,7 @@
     installCancelableGenerationButtons();
     installPromptPreviewPane();
     installPixelEditor();
+    installCellCopyTools();
   });
 
   window.Project = {
