@@ -108,6 +108,14 @@
     document.head.appendChild(script);
   }
 
+  function ensurePixelShiftControlsScript() {
+    if ($('pixelEditorShiftControlsScript')) return;
+    const script = document.createElement('script');
+    script.id = 'pixelEditorShiftControlsScript';
+    script.src = '/pixel-editor-shift-controls.js';
+    document.head.appendChild(script);
+  }
+
   async function loadImage(src) {
     const img = new Image();
     img.decoding = 'async';
@@ -229,6 +237,7 @@
     ensureBulkEnhancerScript();
     ensureThumbnailScopeGuardScript();
     ensureSpriteExportPreviewFixScript();
+    ensurePixelShiftControlsScript();
     box.open = true;
     syncDefaultTransparentTool();
     setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
