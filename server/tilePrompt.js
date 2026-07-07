@@ -47,7 +47,7 @@ function buildFromSlots(slots, hasReference) {
   let prompt = [
     'Positive Prompt',
     `Seamless tileable ${slots.SUBJECT} tile texture, repeating pattern, edge-to-edge ${slots.SUBJECT} coverage with content extending to all four borders.`,
-    `Top-down orthographic view, bird's-eye perspective.`,
+    `2D, bird's-eye perspective.`,
     `${slots.STYLE} style.`,
     `${slots.SUBJECT_DETAIL}.`,
     `${slots.COLOR_PALETTE}.`,
