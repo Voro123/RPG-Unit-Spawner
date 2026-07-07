@@ -45,7 +45,6 @@ async function createProject({ name } = {}) {
   const now = new Date().toISOString();
   const p = { id, name: (name && String(name).trim()) || '未命名项目', createdAt: now, updatedAt: now };
   await fs.mkdir(path.join(projectDir(id), 'sprites'), { recursive: true });
-  await fs.mkdir(path.join(projectDir(id), 'walks'), { recursive: true });
   projects.unshift(p);
   await writeIndex(projects);
   return p;
@@ -65,7 +64,6 @@ async function requireProject(projectId) {
   const p = projects.find((x) => x.id === projectId);
   if (!p) throw new Error('PROJECT_NOT_FOUND');
   await fs.mkdir(path.join(projectDir(projectId), 'sprites'), { recursive: true });
-  await fs.mkdir(path.join(projectDir(projectId), 'walks'), { recursive: true });
   return p;
 }
 
