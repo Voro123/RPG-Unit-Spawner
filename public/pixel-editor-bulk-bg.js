@@ -3,7 +3,9 @@
   let installed = false;
   let paintActive = false;
   let loadTimer = null;
+  let savedPreviewTimer = null;
   let restoringBgControls = false;
+  let internalGridPreviewUpdate = false;
   const state = {
     sheetId: '',
     loadedKey: '',
@@ -92,9 +94,12 @@
     localStorage.setItem(BG_SETTINGS_KEY, JSON.stringify(next));
   }
 
+  function explicitCellBgSettings(sheetId, index) {
+    return readAllBgSettings()[bgStorageKey(sheetId, index)] || null;
+  }
+
   function readCellBgSettings(sheetId, index) {
-    const all = readAllBgSettings();
-    return { ...defaultBgSettings(), ...(all[bgStorageKey(sheetId, index)] || {}) };
+    return { ...defaultBgSettings(), ...(explicitCellBgSettings(sheetId, index) || {}) };
   }
 
   function currentBgControlSettings() {
@@ -244,6 +249,41 @@
     updateMetaLoaded();
   }
 
+  async function processCellPreview(sheetId, index, settings) {
+    const img = await loadImage(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`));
+    const sheet = await fetchJson(`/api/sprites/${sheetId}`);
+    const size = Math.max(1, Number(sheet.cellSize) || 32);
+    const cv = createBlankCanvas(size);
+    const ctx = cv.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, 0, 0, size, size);
+    if (settings.removeBg) edgeColorToTransparent(cv, hexToRgb(settings.bgColor || '#ffffff'), Math.max(0, Math.min(255, Number(settings.bgTolerance || 24))));
+    return cv.toDataURL('image/png');
+  }
+
+  async function applySavedBgSettingsToGrid() {
+    const sheetId = $('sheetSel')?.value || '';
+    const grid = $('grid');
+    if (!sheetId || !grid || internalGridPreviewUpdate) return;
+    const sheet = await fetchJson(`/api/sprites/${sheetId}`);
+    const all = readAllBgSettings();
+    for (const cell of sheet.cells || []) {
+      if (!cell?.imageRef) continue;
+      const settings = all[bgStorageKey(sheetId, cell.index)];
+      if (!settings) continue;
+      if (!settings.removeBg) continue;
+      try {
+        const dataUrl = await processCellPreview(sheetId, cell.index, settings);
+        updateGridCellPreview(cell.index, dataUrl);
+      } catch { /* ignore preview failures */ }
+    }
+  }
+
+  function scheduleSavedGridPreview() {
+    clearTimeout(savedPreviewTimer);
+    savedPreviewTimer = setTimeout(() => applySavedBgSettingsToGrid(), 180);
+  }
+
   async function loadSelectedPixelTargets(force = false) {
     const sheetId = $('sheetSel')?.value || '';
     const indexes = selectedIndexes();
@@ -332,6 +372,7 @@
   function updateGridCellPreview(index, dataUrl) {
     const cellEl = document.querySelector(`#grid .cell[data-i="${index}"]`);
     if (!cellEl) return;
+    internalGridPreviewUpdate = true;
     cellEl.classList.add('filled');
     let img = cellEl.querySelector('img');
     if (!img) {
@@ -342,6 +383,7 @@
       else cellEl.appendChild(img);
     }
     img.src = dataUrl;
+    setTimeout(() => { internalGridPreviewUpdate = false; }, 0);
   }
 
   async function saveSelectedPixelTargets() {
@@ -455,13 +497,14 @@
     document.addEventListener('contextmenu', (e) => {
       if (e.target?.closest?.('#grid .cell')) scheduleLoad(true);
     }, true);
-    document.addEventListener('mouseup', () => {
-      if (document.querySelector('#grid .cell.region')) scheduleLoad(true);
+    document.addEventListener('mouseup', (e) => {
+      if (e.target?.closest?.('#grid') && document.querySelector('#grid .cell.region')) scheduleLoad(true);
     }, true);
     document.addEventListener('change', (e) => {
       if (e.target?.id === 'sheetSel') {
         state.loadedKey = '';
         scheduleLoad(true);
+        scheduleSavedGridPreview();
       }
     }, true);
 
@@ -483,6 +526,19 @@
     });
     $('applyBgBtn')?.addEventListener('click', () => setTimeout(() => scheduleLoad(true), 220));
     box.addEventListener('toggle', () => { if (box.open) scheduleLoad(true); });
+
+    const grid = $('grid');
+    if (grid && grid.dataset.savedBgPreviewBound !== '1') {
+      grid.dataset.savedBgPreviewBound = '1';
+      const observer = new MutationObserver((mutations) => {
+        if (internalGridPreviewUpdate) return;
+        if (mutations.some((m) => m.type === 'childList' || m.attributeName === 'class')) {
+          scheduleLoad(true);
+          scheduleSavedGridPreview();
+        }
+      });
+      observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    }
   }
 
   function install() {
@@ -497,6 +553,7 @@
     syncSwatch();
     box.open = true;
     scheduleLoad(true);
+    scheduleSavedGridPreview();
     return true;
   }
 
