@@ -8,6 +8,8 @@
   let deferredSelectedIndex = null;
   let selectionLockInstalled = false;
   let assetKindRestoreInstalled = false;
+  let cellMenuInstalled = false;
+  let cellMenuClipboard = null;
 
   function $(id) { return document.getElementById(id); }
 
@@ -152,7 +154,8 @@
       .project-modal{width:min(520px,100%);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:22px;box-shadow:0 14px 60px rgba(0,0,0,.5)}
       .prompt-preview-box{margin-top:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}
       .prompt-preview-box summary{cursor:pointer;font-weight:700}.prompt-preview-box textarea{min-height:180px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.5}.prompt-preview-meta{font-size:12px;margin-top:6px;color:var(--muted)}.prompt-preview-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
-      .pixel-editor-box,.cell-copy-box{margin-top:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}.pixel-editor-box summary,.cell-copy-box summary{cursor:pointer;font-weight:700}.pixel-editor-tools,.cell-copy-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.pixel-editor-tools input[type=color]{width:44px;height:34px;padding:2px;margin:0}.pixel-editor-tools input[type=number]{width:92px}.pixel-editor-stage{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background-color:#20242e;background-image:linear-gradient(45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.16) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.16) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;cursor:crosshair}.pixel-editor-meta,.cell-copy-meta{font-size:12px;color:var(--muted);line-height:1.7}.pixel-editor-swatch{display:inline-block;width:16px;height:16px;border:1px solid var(--border);vertical-align:middle;margin-right:4px}.cell-copy-box input[type=text]{min-width:260px;flex:1}
+      .pixel-editor-box{margin-top:16px;border:1px solid var(--border);border-radius:10px;background:var(--panel2);padding:10px}.pixel-editor-box summary{cursor:pointer;font-weight:700}.pixel-editor-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.pixel-editor-tools input[type=color]{width:44px;height:34px;padding:2px;margin:0}.pixel-editor-tools input[type=number]{width:92px}.pixel-editor-stage{display:flex;gap:12px;align-items:flex-start;flex-wrap:wrap}.pixel-editor-canvas{width:min(512px,90vw);height:min(512px,90vw);image-rendering:pixelated;border:1px solid var(--border);border-radius:8px;background-color:#20242e;background-image:linear-gradient(45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(-45deg,rgba(255,255,255,.16) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,rgba(255,255,255,.16) 75%),linear-gradient(-45deg,transparent 75%,rgba(255,255,255,.16) 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0;cursor:crosshair}.pixel-editor-meta{font-size:12px;color:var(--muted);line-height:1.7}.pixel-editor-swatch{display:inline-block;width:16px;height:16px;border:1px solid var(--border);vertical-align:middle;margin-right:4px}
+      .cell-copy-box{display:none!important}.cell-context-menu{position:fixed;z-index:8000;min-width:180px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px;box-shadow:0 14px 48px rgba(0,0,0,.55)}.cell-context-menu .menu-title{font-size:12px;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--border);margin-bottom:4px}.cell-context-menu button{display:block;width:100%;text-align:left;background:transparent;border:0;border-radius:7px;color:var(--text);padding:8px 10px;font-size:13px;cursor:pointer}.cell-context-menu button:hover:not(:disabled){background:var(--panel2)}.cell-context-menu button:disabled{opacity:.45;cursor:not-allowed}.cell-context-menu .danger{color:#ff8b8b}.cell-context-menu .sep{height:1px;background:var(--border);margin:4px 0}
       @media(max-width:760px){.project-bar{position:static;margin:10px 12px}.project-bar select{width:100%}}
     `;
     document.head.appendChild(s);
@@ -504,7 +507,6 @@
   }
 
   function setPixelMeta(text) { if ($('pixelEditorMeta')) $('pixelEditorMeta').textContent = text; }
-  function setCopyMeta(text) { if ($('cellCopyMeta')) $('cellCopyMeta').textContent = text; }
 
   async function loadSelectedPixelCell() {
     const sheetId = selectedSheetId();
@@ -626,98 +628,132 @@
     box.addEventListener('toggle', () => { if (box.open) loadSelectedPixelCell(); });
   }
 
-  function parseCellTargets(text, maxIndex) {
-    const out = new Set();
-    String(text || '').split(/[，,\s]+/).forEach((part) => {
-      if (!part) return;
-      const range = /^(\d+)\s*-\s*(\d+)$/.exec(part);
-      if (range) {
-        const a = Number(range[1]), b = Number(range[2]);
-        const start = Math.min(a, b), end = Math.max(a, b);
-        for (let i = start; i <= end; i++) if (i >= 0 && i <= maxIndex) out.add(i);
-        return;
-      }
-      const n = Number(part);
-      if (Number.isInteger(n) && n >= 0 && n <= maxIndex) out.add(n);
-    });
-    return [...out];
+  async function spriteSheet() {
+    const sheetId = selectedSheetId();
+    return sheetId ? rawJson(`/api/sprites/${sheetId}`) : null;
   }
 
-  function regionTargetIndices(sourceIndex) {
-    return [...document.querySelectorAll('#grid .cell.region')]
-      .map((el) => Number(el.dataset.i))
-      .filter((i) => Number.isInteger(i) && i !== sourceIndex);
-  }
-
-  async function sourceCellImageBase64(sheetId, sourceIndex) {
-    const r = await fetch(withProject(`/api/sprites/${sheetId}/cells/${sourceIndex}?t=${Date.now()}`), { cache: 'no-store' });
-    if (!r.ok) throw new Error('源格没有可复制的图片');
+  async function fetchCellBase64(sheetId, index) {
+    const r = await fetch(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`), { cache: 'no-store' });
+    if (!r.ok) throw new Error('该格没有图片');
     return blobToBase64(await r.blob());
   }
 
-  function numberedTag(baseTag, n, total) {
-    const clean = String(baseTag || '').replace(/\s*\(\d+\/\d+\)\s*$/, '');
-    return total > 1 ? `${clean}(${n}/${total})` : clean;
-  }
-
-  async function copySelectedCellToTargets(mode) {
-    const sheetId = selectedSheetId();
-    const sourceIndex = selectedCellIndex();
-    if (!sheetId || sourceIndex === null) { setCopyMeta('请先选择一个有图片的源格。'); return; }
-    const sheet = await rawJson(`/api/sprites/${sheetId}`);
-    const sourceCell = sheet.cells?.find?.((c) => Number(c.index) === Number(sourceIndex));
-    if (!sourceCell?.imageRef) { setCopyMeta(`源格 ${sourceIndex} 没有图片。`); return; }
-
-    let targets = [];
-    if (mode === 'empty') {
-      targets = sheet.cells.filter((c) => !c.imageRef && Number(c.index) !== Number(sourceIndex)).map((c) => Number(c.index));
-    } else {
-      const maxIndex = Math.max(...sheet.cells.map((c) => Number(c.index)));
-      targets = parseCellTargets($('copyTargetCells')?.value || '', maxIndex);
-      if (!targets.length) targets = regionTargetIndices(sourceIndex);
-      targets = targets.filter((i) => i !== sourceIndex && sheet.cells.some((c) => Number(c.index) === i));
+  async function refreshOpenSheet(sheetId, index) {
+    if (typeof window.openSheet === 'function') {
+      await window.openSheet(sheetId);
+      if (index !== undefined && typeof window.selectCell === 'function') setTimeout(() => window.selectCell(index), 0);
+      return;
     }
-    targets = [...new Set(targets)];
-    if (!targets.length) { setCopyMeta('没有目标格。可拖选区域，或输入如 1,2,5-8。'); return; }
-
-    const image = await sourceCellImageBase64(sheetId, sourceIndex);
-    const autoNumber = $('copyNumberTags')?.checked !== false;
-    setCopyMeta(`正在复制格子 ${sourceIndex} 到 ${targets.length} 个目标格…`);
-    for (let i = 0; i < targets.length; i++) {
-      const tag = autoNumber ? numberedTag(sourceCell.tag || '', i + 1, targets.length) : (sourceCell.tag || '');
-      const r = await api(`/api/sprites/${sheetId}/cells/${targets[i]}/image`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image, tag }),
-      });
-      const j = await r.json();
-      if (!j.ok) throw new Error(j.error || `复制到格子 ${targets[i]} 失败`);
-    }
-    setCopyMeta(`完成 ✓ 已复制到：${targets.join(', ')}`);
-    if ($('opStatus')) $('opStatus').textContent = `已复制图块内容到 ${targets.length} 个格子`;
     $('refreshBtn')?.click?.();
   }
 
-  function installCellCopyTools() {
-    if ($('cellCopyBox') || !$('grid') || !$('tagEdit')) return;
-    const card = $('tagEdit').closest('.card') || $('grid').closest('.card');
-    if (!card) return;
-    const box = document.createElement('details');
-    box.id = 'cellCopyBox';
-    box.className = 'cell-copy-box';
-    box.innerHTML = `
-      <summary>自动复制图块内容到其他格</summary>
-      <p class="muted">选择一个已有图片的源格后，可拖选目标区域，或输入目标格号，把源格图片复制到其他格子。适合重复地块、同款装饰、批量占位。</p>
-      <div class="cell-copy-tools">
-        <input id="copyTargetCells" type="text" placeholder="目标格号：如 1,2,5-8；留空则使用拖选区域" />
-        <button type="button" class="ghost" id="copyToTargetsBtn">复制到目标</button>
-        <button type="button" class="ghost" id="copyToEmptyBtn">复制到所有空格</button>
-        <label style="margin:0"><input id="copyNumberTags" type="checkbox" checked style="width:auto;margin-right:6px">Tag 自动编号</label>
-      </div>
-      <div id="cellCopyMeta" class="cell-copy-meta">源格=当前选中格；目标=输入格号或拖选区域。</div>`;
-    card.appendChild(box);
-    $('copyToTargetsBtn').onclick = async () => { try { await copySelectedCellToTargets('targets'); } catch (e) { setCopyMeta('复制失败：' + (e.message || e)); } };
-    $('copyToEmptyBtn').onclick = async () => { try { await copySelectedCellToTargets('empty'); } catch (e) { setCopyMeta('复制失败：' + (e.message || e)); } };
+  function closeCellMenu() { $('cellContextMenu')?.remove(); }
+
+  function menuButton(label, disabled, onClick, className = '') {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.disabled = !!disabled;
+    if (className) b.className = className;
+    b.onclick = async () => {
+      closeCellMenu();
+      try { await onClick(); } catch (e) { if ($('opStatus')) $('opStatus').textContent = '操作失败：' + (e.message || e); }
+    };
+    return b;
+  }
+
+  async function setCellClipboard(index, mode) {
+    const sheet = await spriteSheet();
+    if (!sheet) return;
+    const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+    if (!cell?.imageRef) throw new Error('当前格没有图片可复制/移动');
+    cellMenuClipboard = {
+      mode,
+      sheetId: sheet.id,
+      index,
+      image: await fetchCellBase64(sheet.id, index),
+      tag: cell.tag || '',
+      assetKind: inferAssetKindFromCell(cell) || undefined,
+    };
+    if ($('opStatus')) $('opStatus').textContent = mode === 'move' ? `已选择移动源格 ${index}，右键目标格后粘贴` : `已复制格子 ${index}，右键目标格后粘贴`;
+  }
+
+  async function pasteCellClipboard(targetIndex) {
+    if (!cellMenuClipboard) return;
+    const sheet = await spriteSheet();
+    if (!sheet) return;
+    const targetCell = sheet.cells?.find?.((c) => Number(c.index) === Number(targetIndex));
+    if (targetCell?.imageRef && !confirm(`目标格 ${targetIndex} 已有图片，是否覆盖？`)) return;
+    const r = await api(`/api/sprites/${sheet.id}/cells/${targetIndex}/image`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: cellMenuClipboard.image, tag: cellMenuClipboard.tag, assetKind: cellMenuClipboard.assetKind }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '粘贴失败');
+    const moved = cellMenuClipboard.mode === 'move';
+    if (moved && !(cellMenuClipboard.sheetId === sheet.id && Number(cellMenuClipboard.index) === Number(targetIndex))) {
+      await api(`/api/sprites/${cellMenuClipboard.sheetId}/cells/${cellMenuClipboard.index}`, { method: 'DELETE' });
+    }
+    if (moved) cellMenuClipboard = null;
+    if ($('opStatus')) $('opStatus').textContent = moved ? `已移动到格子 ${targetIndex}` : `已粘贴到格子 ${targetIndex}`;
+    await refreshOpenSheet(sheet.id, targetIndex);
+  }
+
+  async function deleteCellFromMenu(index) {
+    const sheet = await spriteSheet();
+    if (!sheet) return;
+    const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index));
+    if (!cell?.imageRef) return;
+    if (!confirm(`删除格子 ${index} 的图片和 Tag？`)) return;
+    const r = await api(`/api/sprites/${sheet.id}/cells/${index}`, { method: 'DELETE' });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || '删除失败');
+    if ($('opStatus')) $('opStatus').textContent = `已删除格子 ${index}`;
+    await refreshOpenSheet(sheet.id, index);
+  }
+
+  async function openCellMenu(event, index) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeCellMenu();
+    if (typeof window.selectCell === 'function') window.selectCell(index);
+    const sheet = await spriteSheet();
+    const cell = sheet?.cells?.find?.((c) => Number(c.index) === Number(index));
+    const hasImage = !!cell?.imageRef;
+    const menu = document.createElement('div');
+    menu.id = 'cellContextMenu';
+    menu.className = 'cell-context-menu';
+    menu.innerHTML = `<div class="menu-title">格子 ${index}${cellMenuClipboard ? ` · 剪贴板：${cellMenuClipboard.index}` : ''}</div>`;
+    menu.appendChild(menuButton('复制图块', !hasImage, () => setCellClipboard(index, 'copy')));
+    menu.appendChild(menuButton('移动图块（剪切）', !hasImage, () => setCellClipboard(index, 'move')));
+    const sep = document.createElement('div'); sep.className = 'sep'; menu.appendChild(sep);
+    menu.appendChild(menuButton('粘贴到此格', !cellMenuClipboard, () => pasteCellClipboard(index)));
+    const sep2 = document.createElement('div'); sep2.className = 'sep'; menu.appendChild(sep2);
+    menu.appendChild(menuButton('删除此格', !hasImage, () => deleteCellFromMenu(index), 'danger'));
+    document.body.appendChild(menu);
+    const pad = 8;
+    let x = event.clientX, y = event.clientY;
+    const rect = menu.getBoundingClientRect();
+    if (x + rect.width > innerWidth - pad) x = innerWidth - rect.width - pad;
+    if (y + rect.height > innerHeight - pad) y = innerHeight - rect.height - pad;
+    menu.style.left = Math.max(pad, x) + 'px';
+    menu.style.top = Math.max(pad, y) + 'px';
+  }
+
+  function installCellContextMenu() {
+    if (cellMenuInstalled) return;
+    cellMenuInstalled = true;
+    document.addEventListener('contextmenu', (e) => {
+      const cell = e.target?.closest?.('#grid .cell');
+      if (!cell) return;
+      const index = Number(cell.dataset.i);
+      if (Number.isInteger(index)) openCellMenu(e, index);
+    });
+    document.addEventListener('click', (e) => { if (!e.target?.closest?.('#cellContextMenu')) closeCellMenu(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCellMenu(); });
+    window.addEventListener('scroll', closeCellMenu, true);
   }
 
   async function init({ requireProject = true } = {}) {
@@ -741,7 +777,7 @@
     installCancelableGenerationButtons();
     installPromptPreviewPane();
     installPixelEditor();
-    installCellCopyTools();
+    installCellContextMenu();
   });
 
   window.Project = {
