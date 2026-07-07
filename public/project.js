@@ -4,6 +4,9 @@
   let projectsCache = [];
   let activeGeneration = null;
   let promptPreviewTimer = null;
+  let generationTargetIndex = null;
+  let deferredSelectedIndex = null;
+  let selectionLockInstalled = false;
 
   function $(id) { return document.getElementById(id); }
 
@@ -22,6 +25,11 @@
 
   function cellGenerationMatch(url) {
     return /\/api\/sprites\/([^/]+)\/cells\/([^/]+)\/(generate|replace)$/.exec(url || '');
+  }
+
+  function domSelectedCellIndex() {
+    const el = document.querySelector('#grid .cell.selected');
+    return el ? Number(el.dataset.i) : null;
   }
 
   function currentEditableFinalPrompt() {
@@ -260,7 +268,37 @@
 
   function isAbortError(e) { return e && (e.name === 'AbortError' || e.code === DOMException.ABORT_ERR); }
 
+  function installGenerationSelectionLock() {
+    if (selectionLockInstalled) return;
+    selectionLockInstalled = true;
+
+    const wrapSelectCell = () => {
+      const fn = window.selectCell;
+      if (typeof fn !== 'function' || fn.__generationTargetLocked) return;
+      const wrapped = function lockedSelectCell(i, ...rest) {
+        const nextIndex = Number(i);
+        if (generationTargetIndex !== null && nextIndex !== generationTargetIndex) return;
+        return fn.call(this, i, ...rest);
+      };
+      wrapped.__generationTargetLocked = true;
+      wrapped.__original = fn;
+      window.selectCell = wrapped;
+    };
+
+    wrapSelectCell();
+    setTimeout(wrapSelectCell, 0);
+
+    document.addEventListener('mousedown', (e) => {
+      if (generationTargetIndex === null) return;
+      const cell = e.target?.closest?.('#grid .cell');
+      if (!cell) return;
+      const nextIndex = Number(cell.dataset.i);
+      if (Number.isFinite(nextIndex) && nextIndex !== generationTargetIndex) deferredSelectedIndex = nextIndex;
+    }, true);
+  }
+
   function installCancelableGenerationButtons() {
+    installGenerationSelectionLock();
     const candidates = [
       { id: 'genBtn', label: '取消生成' },
       { id: 'replaceBtn', label: '取消生成' },
@@ -284,6 +322,8 @@
 
         const controller = new AbortController();
         activeGeneration = { controller, button: btn };
+        generationTargetIndex = domSelectedCellIndex();
+        deferredSelectedIndex = null;
         btn.textContent = item.label;
         for (const other of buttons) if (other.el !== btn) other.el.disabled = true;
 
@@ -296,9 +336,15 @@
             throw e;
           }
         } finally {
+          const pendingSelection = deferredSelectedIndex;
+          generationTargetIndex = null;
+          deferredSelectedIndex = null;
           if (activeGeneration?.controller === controller) activeGeneration = null;
           btn.textContent = originalText;
           for (const other of buttons) other.el.disabled = false;
+          if (pendingSelection !== null && typeof window.selectCell === 'function') {
+            setTimeout(() => window.selectCell(pendingSelection), 0);
+          }
         }
       };
     }
