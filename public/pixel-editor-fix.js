@@ -92,6 +92,14 @@
     document.head.appendChild(script);
   }
 
+  function ensureThumbnailScopeGuardScript() {
+    if ($('pixelEditorThumbnailScopeGuardScript')) return;
+    const script = document.createElement('script');
+    script.id = 'pixelEditorThumbnailScopeGuardScript';
+    script.src = '/pixel-editor-thumbnail-scope-guard.js';
+    document.head.appendChild(script);
+  }
+
   async function loadImage(src) {
     const img = new Image();
     img.decoding = 'async';
@@ -211,6 +219,7 @@
     injectFloatingStyle();
     moveBgAdjustSection();
     ensureBulkEnhancerScript();
+    ensureThumbnailScopeGuardScript();
     box.open = true;
     syncDefaultTransparentTool();
     setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
