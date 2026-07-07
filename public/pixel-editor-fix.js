@@ -100,6 +100,14 @@
     document.head.appendChild(script);
   }
 
+  function ensureSpriteExportPreviewFixScript() {
+    if ($('spriteExportPreviewFixScript')) return;
+    const script = document.createElement('script');
+    script.id = 'spriteExportPreviewFixScript';
+    script.src = '/sprite-export-preview-fix.js';
+    document.head.appendChild(script);
+  }
+
   async function loadImage(src) {
     const img = new Image();
     img.decoding = 'async';
@@ -220,6 +228,7 @@
     moveBgAdjustSection();
     ensureBulkEnhancerScript();
     ensureThumbnailScopeGuardScript();
+    ensureSpriteExportPreviewFixScript();
     box.open = true;
     syncDefaultTransparentTool();
     setTimeout(() => syncPixelEditorFromSelection({ force: true }), 80);
