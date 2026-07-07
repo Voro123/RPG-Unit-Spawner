@@ -11,7 +11,6 @@
     <a href="/">首页</a>
     <a href="/config.html" class="active">配置</a>
     <a href="/sprite.html">精灵图生成</a>
-    <a href="/walk.html">行走图生成</a>
   </nav>
   <div class="container">
     <h1>服务商配置</h1>
@@ -23,20 +22,20 @@
 
       <label>API 接入区域（Base URL）</label>
       <select id="baseUrl">
-        <option value="https://api.minimax.io">国际站 api.minimax.io</option>
-        <option value="https://api.minimaxi.com">国内站 api.minimaxi.com</option>
+        <option value="https://api.minimax.io">国际站 https://api.minimax.io</option>
+        <option value="https://api.minimaxi.com">国内站 https://api.minimaxi.com</option>
       </select>
-      <p class="muted" id="keyHint"></p>
-
-      <label>API Key</label>
-      <input id="apiKey" type="password" placeholder="填入 MINIMAX API Key（留空则保留已保存的）" />
 
       <label>模型</label>
       <select id="model"></select>
 
-      <div class="row" style="margin-top:14px">
-        <button id="save">保存配置</button>
-        <button class="ghost" id="test">测试连接</button>
+      <label>API Key</label>
+      <input id="apiKey" placeholder="填入 MINIMAX API Key；留空则保留现有 Key" />
+      <div class="muted" id="keyInfo"></div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="saveBtn">保存配置</button>
+        <button id="testBtn" class="ghost">测试 Key</button>
         <span id="status" class="muted"></span>
       </div>
     </div>
@@ -45,53 +44,28 @@
   <script src="/project.js"></script>
   <script>
     const $ = (id) => document.getElementById(id);
-
     async function load() {
+      await Project.init({ requireProject: false });
       const c = await (await fetch('/api/config')).json();
-      $('model').innerHTML = c.models
-        .map((m) => `<option value="${m}" ${m === c.model ? 'selected' : ''}>${m}</option>`)
-        .join('');
-      $('baseUrl').value = c.baseUrl;
-      $('status').innerHTML = c.hasKey
-        ? `<span class="ok">已配置 ✓ 当前 Key：${c.apiKeyMask}</span>`
-        : '<span class="err">尚未配置</span>';
-      $('keyHint').textContent = c.hasKey
-        ? '已保存的 Key 为 ' + c.apiKeyMask + '，留空即保留。'
-        : '';
+      $('baseUrl').value = c.baseUrl || 'https://api.minimax.io';
+      $('model').innerHTML = c.models.map((m) => `<option ${m === c.model ? 'selected' : ''}>${m}</option>`).join('');
+      $('keyInfo').textContent = c.hasKey ? `已保存 Key：${c.apiKeyMask}` : '尚未保存 API Key';
     }
-
-    $('save').onclick = async () => {
-      const api_key = $('apiKey').value.trim();
-      const model = $('model').value;
-      const base_url = $('baseUrl').value;
-      const r = await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'minimax', api_key, model, base_url }),
-      });
+    $('saveBtn').onclick = async () => {
+      $('status').textContent = '保存中…';
+      const body = { api_key: $('apiKey').value.trim(), model: $('model').value, base_url: $('baseUrl').value };
+      const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json();
-      $('status').textContent = j.ok ? '已保存 ✓' : '保存失败：' + (j.error || '');
-      if (j.ok) load();
+      $('status').textContent = j.ok ? '已保存 ✓' : '失败：' + (j.error || '');
+      await load();
     };
-
-    $('test').onclick = async () => {
-      const api_key = $('apiKey').value.trim();
-      const model = $('model').value;
-      const base_url = $('baseUrl').value;
-      await fetch('/api/config', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ provider: 'minimax', api_key, model, base_url }),
-      });
-      $('status').textContent = '测试中…（可能消耗一次生成）';
+    $('testBtn').onclick = async () => {
+      $('status').textContent = '测试中…';
       const r = await fetch('/api/config/test', { method: 'POST' });
       const j = await r.json();
-      if (j.ok) $('status').innerHTML = '<span class="ok">连接成功 ✓ Key 有效</span>';
-      else $('status').innerHTML = '<span class="err">连接失败：' + (j.error || 'unknown') + '</span>';
-      load();
+      $('status').textContent = j.ok ? 'Key 有效 ✓' : '失败：' + (j.error || '');
     };
-
-    (async () => { await Project.init({ requireProject: true }); await load(); })();
+    load();
   </script>
 </body>
 </html>
