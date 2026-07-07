@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs/promises');
 const { getConfig, saveConfig, maskKey } = require('./config');
 const minimax = require('./minimax');
+const tilePrompt = require('./tilePrompt');
 const sprites = require('./projectSprites');
 const projects = require('./projects');
 const walks = require('./walks');
@@ -24,31 +25,6 @@ function clipText(text, maxLen = MAX_SUBJECT_CHARS) {
   return s.length > maxLen ? s.slice(0, maxLen) : s;
 }
 
-function splitPromptTokens(text) {
-  return String(text || '')
-    .split(/[，,、;；\n]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function uniq(list) {
-  const out = [];
-  const seen = new Set();
-  for (const item of list) {
-    const v = String(item || '').trim();
-    if (!v) continue;
-    const key = v.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(v);
-  }
-  return out;
-}
-
-function hasCJK(text) {
-  return /[\u3400-\u9fff]/.test(String(text || ''));
-}
-
 function expandSpriteSubject(subject) {
   const s = clipText(subject);
   if (/^(花|花朵|小花|flower|flowers)$/i.test(s)) {
@@ -66,154 +42,13 @@ function promptFromClient(finalPrompt) {
   return p ? capPrompt(p) : null;
 }
 
-function parseTileIntent(promptText) {
-  const raw = clipText(promptText);
-  const tokens = splitPromptTokens(raw);
-  const joined = tokens.join(' ');
-
-  const materials = [
-    {
-      key: 'grass',
-      regex: /(草地|草坪|grass|lawn|meadow)/i,
-      label: 'grass',
-      coverage: 'grass',
-      only: 'grass surface',
-      detail: 'Lush green natural grass field, dense natural grass blades with subtle color variation.',
-      palette: 'fresh bright green color palette',
-      negativeRemove: [],
-    },
-    {
-      key: 'dirt',
-      regex: /(泥地|土地|土壤|dirt|soil|earth)/i,
-      label: 'dirt',
-      coverage: 'dirt',
-      only: 'dirt ground surface',
-      detail: 'Natural dirt ground surface with subtle soil variation and compact earth texture.',
-      palette: 'earthy brown natural color palette',
-      negativeRemove: ['dirt'],
-    },
-    {
-      key: 'sand',
-      regex: /(沙地|沙漠|sand)/i,
-      label: 'sand',
-      coverage: 'sand',
-      only: 'sand surface',
-      detail: 'Fine natural sand surface with subtle grain variation and clean desert-like texture.',
-      palette: 'warm sandy natural color palette',
-      negativeRemove: [],
-    },
-    {
-      key: 'stone',
-      regex: /(石地|石板|石砖|石头地|stone|rock|cobblestone|pavement)/i,
-      label: 'stone ground',
-      coverage: 'stone ground',
-      only: 'stone surface',
-      detail: 'Clean stone ground texture with subtle material variation and orderly surface detail.',
-      palette: 'clean natural stone color palette',
-      negativeRemove: ['rocks', 'stones'],
-    },
-    {
-      key: 'water',
-      regex: /(水面|水地|河面|湖面|water|river|lake)/i,
-      label: 'water',
-      coverage: 'water',
-      only: 'water surface',
-      detail: 'Clean water surface texture with subtle natural variation and smooth repeating flow pattern.',
-      palette: 'fresh blue natural color palette',
-      negativeRemove: ['water'],
-    },
-    {
-      key: 'snow',
-      regex: /(雪地|snow|ice)/i,
-      label: 'snow',
-      coverage: 'snow',
-      only: 'snow surface',
-      detail: 'Soft snow ground texture with subtle snow variation and crisp clean surface detail.',
-      palette: 'clean cool white-blue color palette',
-      negativeRemove: [],
-    },
-    {
-      key: 'wood',
-      regex: /(木地板|木板|木头|wood|plank)/i,
-      label: 'wood plank ground',
-      coverage: 'wood plank ground',
-      only: 'wood plank surface',
-      detail: 'Hand-painted wood plank texture with subtle grain variation and clean repeating board pattern.',
-      palette: 'warm natural wood color palette',
-      negativeRemove: [],
-    },
-  ];
-
-  let material = materials.find((m) => m.regex.test(joined));
-  if (!material) {
-    const fallback = hasCJK(joined) ? 'terrain surface' : (joined || 'terrain surface');
-    material = {
-      key: 'generic',
-      label: fallback,
-      coverage: fallback,
-      only: fallback,
-      detail: `Clean ${fallback} texture with subtle natural variation and consistent repeating surface detail.`,
-      palette: 'clean game-friendly color palette',
-      negativeRemove: [],
-    };
-  }
-
-  const styleParts = [];
-  if (/(清新动漫风|动漫风|anime|jrpg)/i.test(joined)) {
-    styleParts.push('Clean anime illustration style', 'JRPG game asset', 'soft cel-shaded look', 'hand-painted texture');
-  } else if (/(像素风|像素|pixel)/i.test(joined)) {
-    styleParts.push('Pixel art style', 'RPG game asset');
-  } else {
-    styleParts.push('RPG game asset', 'hand-painted texture');
-  }
-
-  if (/(清新|fresh|bright)/i.test(joined)) {
-    styleParts.push(material.palette);
-  } else if (!styleParts.includes(material.palette) && material.key === 'grass') {
-    styleParts.push(material.palette);
-  }
-
-  const negativeBase = [
-    'flowers', 'rocks', 'trees', 'stones', 'mushrooms', 'paths', 'dirt', 'water', 'items', 'characters', 'animals',
-    'text', 'watermark', 'signature', 'border', 'frame', 'edge artifacts', 'visible seams', 'hard edges',
-    'shadows', 'highlights', 'vignette', 'perspective', '3d render', 'photorealistic', 'blurry', 'low quality',
-  ];
-  const negative = uniq(negativeBase.filter((item) => !material.negativeRemove.includes(item)));
-
-  return {
-    material,
-    styleLine: uniq(styleParts).join(', '),
-    negativeLine: negative.join(', '),
-  };
-}
-
-function buildTilePrompt(promptText, ref) {
-  const tile = parseTileIntent(promptText);
-  let final =
-    `Seamless tileable ${tile.material.label} tile texture, repeating pattern, edge-to-edge ${tile.material.coverage} coverage with content extending to all four borders. ` +
-    `Top-down orthographic view, bird's-eye perspective. ` +
-    `${tile.styleLine}. ` +
-    `${tile.material.detail} ` +
-    `Only ${tile.material.only}, no other elements, no props, no flowers, no rocks, no trees, no paths, no items, no characters, no water, no text, no UI, no watermark, no signature, no borders, no frames, no vignette. ` +
-    `No visible edges, no borders, no seams, perfect tile edges, all four sides blending seamlessly. ` +
-    `Uniform flat ambient lighting, even light from all directions, no shadows, no highlights, no directional light source. ` +
-    `Perfectly continuous pattern, edges blend seamlessly when tiled.`;
-
-  if (ref) {
-    final += ` Reference image is style and palette only; keep the tile fully seamless and do not copy any props, borders, frames, edge artifacts, seams, shadows, or unrelated objects.`;
-  }
-
-  final += ` Negative Prompt: ${tile.negativeLine}.`;
-  return capPrompt(final);
-}
-
-function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
+async function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   const kind = normalizeAssetKind(assetKind);
   const rawSubject = clipText(promptText);
   const subject = kind === 'sprite' ? expandSpriteSubject(rawSubject) : rawSubject;
 
   if (kind === 'tile') {
-    return buildTilePrompt(promptText, ref);
+    return (await tilePrompt.build(promptText, !!ref)).prompt;
   }
 
   let final =
@@ -281,6 +116,7 @@ app.get('/api/config', async (req, res) => {
     provider: c.provider,
     model: c.model,
     models: minimax.listModels(),
+    textModels: minimax.listTextModels ? minimax.listTextModels() : [],
     baseUrl: c.base_url || 'https://api.minimax.io',
     hasKey: !!c.api_key,
     apiKeyMask: maskKey(c.api_key),
@@ -299,7 +135,7 @@ app.post('/api/config', async (req, res) => {
   const key = (api_key && api_key.trim()) || cur.api_key || '';
   const m = model || cur.model || 'image-01';
   const url = base_url && base_url.trim() ? base_url.trim() : (cur.base_url || 'https://api.minimax.io');
-  await saveConfig({ provider: 'minimax', api_key: key, model: m, base_url: url });
+  await saveConfig({ provider: 'minimax', api_key: key, model: m, base_url: url, text_model: cur.text_model || 'MiniMax-Text-01' });
   res.json({ ok: true });
 });
 
@@ -368,8 +204,16 @@ app.post('/api/sprites/:id/prompt-preview', async (req, res) => {
       ref = await resolveAutoReference(projectId, req.params.id, kind);
       referenceSource = ref ? 'auto' : 'none';
     }
-    const finalPrompt = buildPixelPrompt(prompt, ref, kind);
-    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, assetKind: kind, hasReference: !!ref, referenceSource });
+    let slots = null;
+    let finalPrompt;
+    if (kind === 'tile') {
+      const built = await tilePrompt.build(prompt, !!ref);
+      finalPrompt = built.prompt;
+      slots = built.slots;
+    } else {
+      finalPrompt = await buildPixelPrompt(prompt, ref, kind);
+    }
+    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, assetKind: kind, hasReference: !!ref, referenceSource, slots });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -391,7 +235,7 @@ async function generateCell(req, res) {
     else if (!ref) ref = await resolveAutoReference(projectId, id, kind);
 
     const cfg = await getConfig();
-    const promptToSend = customPrompt || buildPixelPrompt(prompt, ref, kind);
+    const promptToSend = customPrompt || await buildPixelPrompt(prompt, ref, kind);
     const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
     const tag = `${kind === 'tile' ? '地块' : '非地块'}：${(prompt || customPrompt).trim()}`;
@@ -446,7 +290,7 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
     if (reference === false) ref = null;
     else if (!ref) ref = await resolveAutoReference(projectId, req.params.id, kind);
     const cfg = await getConfig();
-    const promptToSend = customPrompt || buildPixelPrompt(prompt, ref, kind);
+    const promptToSend = customPrompt || await buildPixelPrompt(prompt, ref, kind);
     const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: ref, seed, width, height, promptOptimizer: false });
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
     res.json({ image: imgs[0], prompt: promptToSend, promptLength: promptToSend.length });
@@ -525,7 +369,7 @@ app.post('/api/generate', async (req, res) => {
     if (!prompt && !customPrompt) return res.status(400).json({ error: 'PROMPT_REQUIRED' });
     const kind = normalizeAssetKind(assetKind);
     const cfg = await getConfig();
-    const promptToSend = customPrompt || buildPixelPrompt(prompt, reference, kind);
+    const promptToSend = customPrompt || await buildPixelPrompt(prompt, reference, kind);
     const imgs = await minimax.generateImage({ model: cfg.model, prompt: promptToSend, referenceImageBase64: reference, seed, n, promptOptimizer: false });
     res.json({ images: imgs, prompt: promptToSend, promptLength: promptToSend.length });
   } catch (e) {
