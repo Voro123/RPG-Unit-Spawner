@@ -6,7 +6,6 @@ const minimax = require('./minimax');
 const tilePrompt = require('./tilePrompt');
 const sprites = require('./projectSprites');
 const projects = require('./projects');
-const walks = require('./walks');
 
 const app = express();
 app.use(express.json({ limit: '15mb' }));
@@ -16,50 +15,9 @@ const BG_COLOR = '#FFFFFF';
 const TILE_IMAGE_SIZE = 1024;
 const MAX_MINIMAX_PROMPT_CHARS = 1400;
 const MAX_SUBJECT_CHARS = 260;
-const WALK_SHEET_TYPES = {
-  move: {
-    key: 'move',
-    label: '移动行走图',
-    dirs: 4,
-    frames: 4,
-    layout: '4 rows by 4 columns',
-    purpose: 'walking movement animation',
-    details: 'Show 4 directions: down, left, right, up. Each row is one direction and each column is one frame of the walk cycle.',
-  },
-  attack: {
-    key: 'attack',
-    label: '攻击行走图',
-    dirs: 1,
-    frames: 6,
-    layout: '1 row by 6 columns',
-    purpose: 'attack animation',
-    details: 'Show a single-direction attack action sequence in one horizontal strip with 6 frames.',
-  },
-  hurt: {
-    key: 'hurt',
-    label: '受击行走图',
-    dirs: 1,
-    frames: 3,
-    layout: '1 row by 3 columns',
-    purpose: 'hurt reaction animation',
-    details: 'Show a single-direction getting-hit reaction in one horizontal strip with 3 frames.',
-  },
-};
 
 function normalizeAssetKind(assetKind) {
   return assetKind === 'tile' ? 'tile' : 'sprite';
-}
-
-function normalizeWalkActionType(actionType) {
-  return WALK_SHEET_TYPES[actionType] ? actionType : 'move';
-}
-
-function walkSheetConfig(actionType) {
-  return WALK_SHEET_TYPES[normalizeWalkActionType(actionType)];
-}
-
-function walkActionTypes(actionType) {
-  return actionType === 'all' ? ['move', 'attack', 'hurt'] : [normalizeWalkActionType(actionType)];
 }
 
 function clipText(text, maxLen = MAX_SUBJECT_CHARS) {
@@ -128,25 +86,6 @@ async function buildPixelPrompt(promptText, ref, assetKind = 'sprite') {
   if (ref) final += `Reference is style/palette only; do not copy its subject, layout, background, border, ground, or texture. `;
   final += `Final: one large visible ${rawSubject} sprite centered on white background.`;
   return capPrompt(final);
-}
-
-function buildWalkPrompt({ characterName, prompt, actionType = 'move', cellSize = 32, ref }) {
-  const cfg = walkSheetConfig(actionType);
-  const who = clipText(characterName || 'Unnamed character', 80);
-  const desc = clipText(prompt || '', 240);
-  let out =
-    `Pixel art sprite sheet for a 2D top-down RPG. ` +
-    `Character name: ${who}. ` +
-    `${desc ? `Character design: ${desc}. ` : ''}` +
-    `Generate a ${cfg.purpose}. ` +
-    `${cfg.details} ` +
-    `Arrange the sheet as ${cfg.layout}. ` +
-    `Each frame about ${Number(cellSize) || 32}px. ` +
-    `Keep the same character identity, outfit, hair, colors, silhouette, and proportions across every frame. ` +
-    `Readable top-down RPG game asset, visible square pixels, no blur, no gradients, no text, no UI, no frame numbers. ` +
-    `Transparent background if possible; otherwise plain solid white background. `;
-  if (ref) out += `Reference is for the same character design/style only; preserve identity and outfit while making this ${cfg.label}. `;
-  return capPrompt(out);
 }
 
 async function requireProjectId(req) {
@@ -366,124 +305,6 @@ app.post('/api/sprites/:id/generate-raw', async (req, res) => {
     const imgs = await minimax.generateImage(args);
     if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
     res.json({ image: imgs[0], prompt: promptToSend, promptLength: promptToSend.length, minimaxRequest: requestPreview(args) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/walks', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    res.json(await walks.listWalks(projectId));
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.get('/api/walks/:id/image', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    const buf = await walks.readWalkImage(projectId, req.params.id);
-    res.set('Cache-Control', 'no-store');
-    res.type('png').send(buf);
-  } catch {
-    res.status(404).end();
-  }
-});
-
-app.put('/api/walks/:id', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    const { name } = req.body || {};
-    const meta = await walks.renameWalk(projectId, req.params.id, name);
-    res.json({ ok: true, meta });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-app.delete('/api/walks/:id', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    res.json(await walks.deleteWalk(projectId, req.params.id));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/walks/prompt-preview', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    const { prompt, characterName, reference, actionType, cellSize } = req.body || {};
-    if (!characterName && !prompt) return res.json({ ok: true, prompt: '', promptLength: 0, hasReference: false, referenceSource: 'none' });
-    const singleAction = normalizeWalkActionType(actionType);
-    let ref = explicitReferenceMarker(reference);
-    let referenceSource = ref ? 'explicit' : 'none';
-    if (reference === false) {
-      ref = null;
-      referenceSource = 'none';
-    } else if (!ref) {
-      ref = await walks.firstWalkDataUrl(projectId);
-      referenceSource = ref ? 'auto' : 'none';
-    }
-    const finalPrompt = buildWalkPrompt({ characterName, prompt, actionType: singleAction, cellSize, ref });
-    const cfg = await getConfig();
-    const args = { model: cfg.model, prompt: finalPrompt, referenceImageBase64: ref, promptOptimizer: false };
-    res.json({ ok: true, prompt: finalPrompt, promptLength: finalPrompt.length, hasReference: !!ref, referenceSource, actionType: singleAction, sheet: walkSheetConfig(singleAction), minimaxRequest: requestPreview(args) });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.post('/api/walks/generate', async (req, res) => {
-  try {
-    const projectId = await requireProjectId(req);
-    const { prompt, characterName, reference, seed, cellSize, actionType, finalPrompt } = req.body || {};
-    const who = clipText(characterName, 80);
-    if (!who) return res.status(400).json({ error: 'CHARACTER_NAME_REQUIRED' });
-    const types = walkActionTypes(actionType);
-    const customPrompt = types.length === 1 ? promptFromClient(finalPrompt) : null;
-    let ref = reference;
-    if (reference === false) ref = null;
-    else if (!ref) ref = await walks.firstWalkDataUrl(projectId);
-    const cfg = await getConfig();
-    const items = [];
-    let rollingReference = ref;
-
-    for (const type of types) {
-      const sheet = walkSheetConfig(type);
-      const promptToSend = customPrompt || buildWalkPrompt({ characterName: who, prompt, actionType: type, cellSize, ref: rollingReference });
-      const args = { model: cfg.model, prompt: promptToSend, referenceImageBase64: rollingReference, seed, promptOptimizer: false };
-      const imgs = await minimax.generateImage(args);
-      if (!imgs.length) return res.status(502).json({ error: 'NO_IMAGE' });
-      const meta = await walks.saveWalk(projectId, {
-        name: `${who} · ${sheet.label}`,
-        characterName: who,
-        actionType: type,
-        prompt: prompt || '',
-        dirs: sheet.dirs,
-        frames: sheet.frames,
-        cellSize,
-        imageBase64: imgs[0],
-      });
-      items.push({
-        ok: true,
-        actionType: type,
-        sheet,
-        meta,
-        image: imgs[0],
-        prompt: promptToSend,
-        promptLength: promptToSend.length,
-        minimaxRequest: requestPreview(args),
-      });
-      rollingReference = `data:image/png;base64,${imgs[0]}`;
-    }
-
-    if (items.length === 1) {
-      const item = items[0];
-      return res.json({ ok: true, ...item });
-    }
-    res.json({ ok: true, characterName: who, items });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
