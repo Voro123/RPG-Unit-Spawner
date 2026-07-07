@@ -1,11 +1,14 @@
 (() => {
   const BG_SETTINGS_KEY = 'rpg-unit-spawner.cellBgSettings.v1';
+  const SESSION_PREVIEW_CACHE = window.__RpgCellPreviewCache || (window.__RpgCellPreviewCache = new Map());
+  const DIRTY_PIXEL_CACHE = window.__RpgDirtyPixelCache || (window.__RpgDirtyPixelCache = new Map());
+  const AUTO_SAVE_TIMERS = new Map();
   let installed = false;
   let paintActive = false;
   let loadTimer = null;
   let savedPreviewTimer = null;
   let restoringBgControls = false;
-  let internalGridPreviewUpdate = false;
+  let internalGridPreviewUpdateUntil = 0;
   const state = {
     sheetId: '',
     loadedKey: '',
@@ -24,6 +27,10 @@
     if (!pid) return url;
     const sep = url.includes('?') ? '&' : '?';
     return `${url}${sep}projectId=${encodeURIComponent(pid)}`;
+  }
+
+  function cellKey(sheetId, index) {
+    return `${projectId() || 'default'}:${sheetId}:${index}`;
   }
 
   async function fetchJson(url, opt = {}) {
@@ -48,6 +55,15 @@
     } finally {
       setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
     }
+  }
+
+  async function loadImageFromDataUrl(dataUrl) {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
   }
 
   function canvasToBase64(canvas) {
@@ -78,7 +94,7 @@
   }
 
   function bgStorageKey(sheetId, index) {
-    return `${projectId() || 'default'}:${sheetId}:${index}`;
+    return cellKey(sheetId, index);
   }
 
   function defaultBgSettings() {
@@ -231,11 +247,51 @@
     }
     const indexes = state.items.map((item) => item.index);
     const settings = currentBgControlSettings();
+    const saveHint = Array.from(AUTO_SAVE_TIMERS.keys()).length ? ' · 正在自动保存' : '';
     if (state.items.length === 1) {
-      setMeta(`已载入：格子 ${indexes[0]} · ${state.size}×${state.size} · 相近色 ${settings.bgTolerance}。相近色配置只属于当前格子；左键绘制，右键吸色。`);
+      setMeta(`已载入：格子 ${indexes[0]} · ${state.size}×${state.size} · 相近色 ${settings.bgTolerance}${saveHint}。相近色配置只属于当前格子；左键绘制，右键吸色。`);
       return;
     }
-    setMeta(`已载入 ${state.items.length} 个格子：${indexes.join(', ')} · 相近色 ${settings.bgTolerance}。当前画布显示第一个格子；像素编辑与相近色调整会同时作用并保存到这些选中格子。`);
+    setMeta(`已载入 ${state.items.length} 个格子：${indexes.join(', ')} · 相近色 ${settings.bgTolerance}${saveHint}。当前画布显示第一个格子；像素编辑与相近色调整会同时作用并保存到这些选中格子。`);
+  }
+
+  function rememberPreview(sheetId, index, dataUrl, { dirty = false } = {}) {
+    const key = cellKey(sheetId, index);
+    SESSION_PREVIEW_CACHE.set(key, dataUrl);
+    if (dirty) DIRTY_PIXEL_CACHE.set(key, dataUrl);
+  }
+
+  function getRememberedPreview(sheetId, index) {
+    return SESSION_PREVIEW_CACHE.get(cellKey(sheetId, index)) || '';
+  }
+
+  function getDirtyPreview(sheetId, index) {
+    return DIRTY_PIXEL_CACHE.get(cellKey(sheetId, index)) || '';
+  }
+
+  function applyRememberedPreviewCacheToGrid() {
+    const sheetId = $('sheetSel')?.value || '';
+    if (!sheetId) return;
+    document.querySelectorAll('#grid .cell').forEach((cellEl) => {
+      const index = Number(cellEl.dataset.i);
+      if (!Number.isInteger(index)) return;
+      const cached = getRememberedPreview(sheetId, index);
+      if (!cached) return;
+      updateGridCellPreview(index, cached, { remember: false });
+    });
+  }
+
+  function hideCellsWaitingForSavedPreview() {
+    const sheetId = $('sheetSel')?.value || '';
+    if (!sheetId) return;
+    const all = readAllBgSettings();
+    document.querySelectorAll('#grid .cell').forEach((cellEl) => {
+      const index = Number(cellEl.dataset.i);
+      if (!Number.isInteger(index)) return;
+      const settings = all[bgStorageKey(sheetId, index)];
+      const img = cellEl.querySelector('img');
+      if (img && settings?.removeBg && !getRememberedPreview(sheetId, index)) img.style.visibility = 'hidden';
+    });
   }
 
   function reapplyBgPreviewToEditor({ updateGrid = true } = {}) {
@@ -264,14 +320,15 @@
   async function applySavedBgSettingsToGrid() {
     const sheetId = $('sheetSel')?.value || '';
     const grid = $('grid');
-    if (!sheetId || !grid || internalGridPreviewUpdate) return;
+    if (!sheetId || !grid || Date.now() < internalGridPreviewUpdateUntil) return;
+    applyRememberedPreviewCacheToGrid();
+    hideCellsWaitingForSavedPreview();
     const sheet = await fetchJson(`/api/sprites/${sheetId}`);
     const all = readAllBgSettings();
     for (const cell of sheet.cells || []) {
       if (!cell?.imageRef) continue;
       const settings = all[bgStorageKey(sheetId, cell.index)];
-      if (!settings) continue;
-      if (!settings.removeBg) continue;
+      if (!settings?.removeBg) continue;
       try {
         const dataUrl = await processCellPreview(sheetId, cell.index, settings);
         updateGridCellPreview(cell.index, dataUrl);
@@ -279,9 +336,29 @@
     }
   }
 
-  function scheduleSavedGridPreview() {
+  function scheduleSavedGridPreview(delay = 30) {
     clearTimeout(savedPreviewTimer);
-    savedPreviewTimer = setTimeout(() => applySavedBgSettingsToGrid(), 180);
+    hideCellsWaitingForSavedPreview();
+    savedPreviewTimer = setTimeout(() => applySavedBgSettingsToGrid(), delay);
+  }
+
+  async function canvasFromRememberedOrServer(sheetId, index, cell, size) {
+    const baseCanvas = createBlankCanvas(size);
+    const ctx = baseCanvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const dirtyDataUrl = getDirtyPreview(sheetId, index);
+    if (dirtyDataUrl) {
+      const img = await loadImageFromDataUrl(dirtyDataUrl);
+      ctx.drawImage(img, 0, 0, size, size);
+      return { baseCanvas, currentCanvas: cloneCanvas(baseCanvas), fromDirty: true };
+    }
+    if (cell?.imageRef) {
+      const img = await loadImage(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`));
+      ctx.drawImage(img, 0, 0, size, size);
+    }
+    const currentCanvas = cloneCanvas(baseCanvas);
+    if (shouldRemoveBg()) edgeColorToTransparent(currentCanvas, selectedBgColor(), bgTolerance());
+    return { baseCanvas, currentCanvas, fromDirty: false };
   }
 
   async function loadSelectedPixelTargets(force = false) {
@@ -305,16 +382,7 @@
     const items = [];
     for (const index of indexes) {
       const cell = sheet.cells?.find?.((c) => Number(c.index) === Number(index)) || { index, tag: '', imageRef: null };
-      const baseCanvas = createBlankCanvas(size);
-      const ctx = baseCanvas.getContext('2d');
-      ctx.imageSmoothingEnabled = false;
-      if (cell?.imageRef) {
-        const img = await loadImage(withProject(`/api/sprites/${sheetId}/cells/${index}?t=${Date.now()}`));
-        ctx.clearRect(0, 0, size, size);
-        ctx.drawImage(img, 0, 0, size, size);
-      }
-      const currentCanvas = cloneCanvas(baseCanvas);
-      if (shouldRemoveBg()) edgeColorToTransparent(currentCanvas, selectedBgColor(), bgTolerance());
+      const { baseCanvas, currentCanvas } = await canvasFromRememberedOrServer(sheetId, index, cell, size);
       items.push({ sheetId, index, tag: cell.tag || '', baseCanvas, currentCanvas });
     }
     state.sheetId = sheetId;
@@ -336,6 +404,22 @@
     return { x, y };
   }
 
+  function scheduleAutoSave() {
+    const items = [...state.items];
+    if (!items.length) return;
+    const groupKey = `${items[0].sheetId}:${items.map((item) => item.index).join(',')}`;
+    clearTimeout(AUTO_SAVE_TIMERS.get(groupKey));
+    AUTO_SAVE_TIMERS.set(groupKey, setTimeout(async () => {
+      AUTO_SAVE_TIMERS.delete(groupKey);
+      try {
+        await saveItems(items, { quiet: true });
+      } catch (e) {
+        setMeta('自动保存失败：' + (e.message || e));
+      }
+    }, 650));
+    updateMetaLoaded();
+  }
+
   function paintPixel(x, y) {
     if (!state.items.length) return;
     const transparent = !!$('pixelTransparent')?.checked;
@@ -351,11 +435,14 @@
         img.data[3] = alpha;
         ctx.putImageData(img, x, y);
       });
-      updateGridCellPreview(item.index, item.currentCanvas.toDataURL('image/png'));
+      const dataUrl = item.currentCanvas.toDataURL('image/png');
+      rememberPreview(item.sheetId, item.index, dataUrl, { dirty: true });
+      updateGridCellPreview(item.index, dataUrl);
     }
     renderDisplayCanvas();
     syncSwatch();
     setMeta(`已修改 ${state.items.length} 个格子的像素 (${x}, ${y}) = rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`);
+    scheduleAutoSave();
   }
 
   function pickPixel(x, y) {
@@ -369,10 +456,12 @@
     setMeta(`已吸取像素 (${x}, ${y}) = rgba(${d[0]}, ${d[1]}, ${d[2]}, ${d[3]})`);
   }
 
-  function updateGridCellPreview(index, dataUrl) {
+  function updateGridCellPreview(index, dataUrl, { remember = true } = {}) {
+    const sheetId = $('sheetSel')?.value || state.sheetId || '';
     const cellEl = document.querySelector(`#grid .cell[data-i="${index}"]`);
+    if (remember && sheetId) rememberPreview(sheetId, index, dataUrl);
     if (!cellEl) return;
-    internalGridPreviewUpdate = true;
+    internalGridPreviewUpdateUntil = Date.now() + 300;
     cellEl.classList.add('filled');
     let img = cellEl.querySelector('img');
     if (!img) {
@@ -382,19 +471,16 @@
       if (idx?.nextSibling) cellEl.insertBefore(img, idx.nextSibling);
       else cellEl.appendChild(img);
     }
+    img.style.visibility = '';
     img.src = dataUrl;
-    setTimeout(() => { internalGridPreviewUpdate = false; }, 0);
   }
 
-  async function saveSelectedPixelTargets() {
-    if (!state.items.length) {
-      setMeta('没有可保存的像素图。');
-      return;
-    }
-    writeBgSettingsForIndexes(state.items[0].sheetId, state.items.map((item) => item.index));
-    setMeta(`保存中…（${state.items.length} 个格子）`);
-    for (const item of state.items) {
-      const tag = state.items.length === 1 ? ($('tagEdit')?.value ?? item.tag) : item.tag;
+  async function saveItems(items, { quiet = false } = {}) {
+    if (!items.length) return;
+    writeBgSettingsForIndexes(items[0].sheetId, items.map((item) => item.index));
+    if (!quiet) setMeta(`保存中…（${items.length} 个格子）`);
+    for (const item of items) {
+      const tag = items.length === 1 ? ($('tagEdit')?.value ?? item.tag) : item.tag;
       const r = await fetch(`/api/sprites/${item.sheetId}/cells/${item.index}/image`, {
         method: 'PUT',
         headers: {
@@ -407,11 +493,23 @@
       if (!j.ok) throw new Error(j.error || `保存格子 ${item.index} 失败`);
       item.tag = tag;
       item.baseCanvas = cloneCanvas(item.currentCanvas);
-      updateGridCellPreview(item.index, item.currentCanvas.toDataURL('image/png'));
+      const dataUrl = item.currentCanvas.toDataURL('image/png');
+      DIRTY_PIXEL_CACHE.delete(cellKey(item.sheetId, item.index));
+      rememberPreview(item.sheetId, item.index, dataUrl);
+      updateGridCellPreview(item.index, dataUrl);
     }
     state.loadedKey = selectionKey();
     updateMetaLoaded();
-    if ($('opStatus')) $('opStatus').textContent = `像素修改已保存（${state.items.length} 个格子）`;
+    if (!quiet && $('opStatus')) $('opStatus').textContent = `像素修改已保存（${items.length} 个格子）`;
+    if (quiet && $('opStatus')) $('opStatus').textContent = `像素修改已自动保存（${items.length} 个格子）`;
+  }
+
+  async function saveSelectedPixelTargets() {
+    if (!state.items.length) {
+      setMeta('没有可保存的像素图。');
+      return;
+    }
+    await saveItems(state.items, { quiet: false });
   }
 
   function replacePixelCanvasAndBind() {
@@ -486,6 +584,21 @@
     reapplyBgPreviewToEditor();
   }
 
+  function patchRenderGrid() {
+    if (typeof window.renderGrid !== 'function' || window.renderGrid.__previewCachePatched) return;
+    const original = window.renderGrid;
+    const wrapped = function patchedRenderGrid(...args) {
+      const result = original.apply(this, args);
+      applyRememberedPreviewCacheToGrid();
+      hideCellsWaitingForSavedPreview();
+      scheduleSavedGridPreview(10);
+      return result;
+    };
+    wrapped.__previewCachePatched = true;
+    wrapped.__original = original;
+    window.renderGrid = wrapped;
+  }
+
   function bindEditorSync() {
     const box = $('pixelEditorBox');
     if (!box || box.dataset.bulkEditorSyncBound === '1') return;
@@ -504,7 +617,7 @@
       if (e.target?.id === 'sheetSel') {
         state.loadedKey = '';
         scheduleLoad(true);
-        scheduleSavedGridPreview();
+        scheduleSavedGridPreview(10);
       }
     }, true);
 
@@ -531,10 +644,12 @@
     if (grid && grid.dataset.savedBgPreviewBound !== '1') {
       grid.dataset.savedBgPreviewBound = '1';
       const observer = new MutationObserver((mutations) => {
-        if (internalGridPreviewUpdate) return;
+        if (Date.now() < internalGridPreviewUpdateUntil) return;
         if (mutations.some((m) => m.type === 'childList' || m.attributeName === 'class')) {
+          applyRememberedPreviewCacheToGrid();
+          hideCellsWaitingForSavedPreview();
           scheduleLoad(true);
-          scheduleSavedGridPreview();
+          scheduleSavedGridPreview(10);
         }
       });
       observer.observe(grid, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
@@ -550,10 +665,13 @@
     replacePixelCanvasAndBind();
     overrideButtons();
     bindEditorSync();
+    patchRenderGrid();
     syncSwatch();
     box.open = true;
+    applyRememberedPreviewCacheToGrid();
+    hideCellsWaitingForSavedPreview();
     scheduleLoad(true);
-    scheduleSavedGridPreview();
+    scheduleSavedGridPreview(10);
     return true;
   }
 
