@@ -18,7 +18,6 @@
     <a href="/">首页</a>
     <a href="/config.html">配置</a>
     <a href="/sprite.html" class="active">精灵图生成</a>
-    <a href="/walk.html">行走图生成</a>
   </nav>
   <div class="container">
     <h1>基本素材精灵图生成</h1>
@@ -67,12 +66,12 @@
         <label style="margin:0;display:flex;align-items:center;gap:6px">底色 <input id="bgColor" type="color" value="#ffffff" style="width:44px;height:34px;padding:2px;margin:0" /></label>
       </div>
       <label>相近色范围：<span id="bgToleranceValue">24</span></label>
-      <input id="bgTolerance" type="range" min="0" max="96" step="1" value="24" />
+      <input id="bgTolerance" type="range" min="0" max="255" step="1" value="24" />
       <div class="row" style="align-items:center;margin-top:8px">
         <canvas id="bgPreview" class="bg-preview" width="96" height="96"></canvas>
-        <button class="ghost" id="applyBgBtn">按当前范围重新处理选中格</button>
+        <button class="ghost" id="applyBgBtn">按当前范围重新处理选中格/区域</button>
       </div>
-      <p class="muted" style="margin-top:6px">滑动时会实时预览并临时刷新上方选中格显示；只有生成或点击重新处理时才会写回文件。处理只替换从画布边缘或透明外部连通进去的相近底色。</p>
+      <p class="muted" style="margin-top:6px">滑动时会实时预览并临时刷新上方选中格或框选区域显示；导出会优先使用这些预览图。点击重新处理才会写回文件。处理只替换从画布边缘或透明外部连通进去的相近底色。</p>
 
       <label>参考图</label>
       <div class="row">
@@ -98,14 +97,12 @@
     let SHEET = null, SEL = null, REGION = null, REF = null;
     let dragging = false, dragStart = null, dragMoved = false;
     let previewTimer = null;
+    const BG_PREVIEW_CACHE = new Map();
 
     function cellUrl(id, index) { return Project.withProject(`/api/sprites/${id}/cells/${index}?t=${Date.now()}`); }
     function api(url, opt) { return Project.fetch(url, opt); }
     function assetKindLabel(kind) { return kind === 'tile' ? '地块' : '非地块'; }
-    function buildAssetTag(kind, prompt, part, total) {
-      const suffix = total && total > 1 ? `(${part}/${total})` : '';
-      return `${assetKindLabel(kind)}：${prompt}${suffix}`;
-    }
+    function buildAssetTag(kind, prompt, part, total) { const suffix = total && total > 1 ? `(${part}/${total})` : ''; return `${assetKindLabel(kind)}：${prompt}${suffix}`; }
 
     function bgTolerance() { return Number($('bgTolerance')?.value || 24); }
     function updateToleranceLabel() { $('bgToleranceValue').textContent = String(bgTolerance()); }
@@ -114,7 +111,8 @@
       const cell = SHEET.cells.find((c) => c.index === index);
       if (!cell.imageRef) return;
       const pv = $('hoverPreview');
-      pv.innerHTML = `<img src="${cellUrl(SHEET.id, index)}" alt="">`;
+      const src = BG_PREVIEW_CACHE.get(index) || cellUrl(SHEET.id, index);
+      pv.innerHTML = `<img src="${src}" alt="">`;
       pv.style.display = 'block';
       movePreview(e);
     }
@@ -127,6 +125,7 @@
     function hidePreview() { $('hoverPreview').style.display = 'none'; }
 
     async function loadSheets() {
+      BG_PREVIEW_CACHE.clear();
       const list = await (await api('/api/sprites')).json();
       const sel = $('sheetSel');
       sel.innerHTML = list.length ? list.map((s) => `<option value="${s.id}">${s.name} (${s.filled}/${s.cellCount})</option>`).join('') : '<option value="">（当前项目无精灵图，请新建）</option>';
@@ -134,28 +133,36 @@
     }
 
     async function openSheet(id) {
+      BG_PREVIEW_CACHE.clear();
       if (!id) { SHEET = null; renderGrid(); clearBgPreview(); return; }
       SHEET = await (await api('/api/sprites/' + id)).json(); REF = null; renderGrid(); renderMeta();
       const empty = SHEET.cells.find((c) => !c.imageRef); selectCell(empty ? empty.index : (SHEET.cells[0] ? SHEET.cells[0].index : null));
     }
+    window.openSheet = openSheet;
+
     function renderMeta() { if (!SHEET) { $('sheetTitle').textContent = '—'; $('sheetMeta').textContent = ''; return; } $('sheetTitle').textContent = SHEET.name; $('sheetMeta').textContent = `cellSize ${SHEET.cellSize} · ${SHEET.cols}×${SHEET.rows}`; }
     function renderGrid() {
       const g = $('grid'); if (!SHEET) { g.innerHTML = ''; return; }
       g.style.gridTemplateColumns = `repeat(${SHEET.cols}, var(--cs))`; g.style.setProperty('--cs', Math.max(32, Math.min(96, SHEET.cellSize * 2)) + 'px');
-      g.innerHTML = SHEET.cells.map((c) => `<div class="cell ${c.imageRef ? 'filled' : ''}" data-i="${c.index}"><span class="idx">${c.index}</span>${c.imageRef ? `<img src="${cellUrl(SHEET.id, c.index)}" alt="">` : ''}</div>`).join('');
+      g.innerHTML = SHEET.cells.map((c) => {
+        const src = c.imageRef ? (BG_PREVIEW_CACHE.get(c.index) || cellUrl(SHEET.id, c.index)) : '';
+        return `<div class="cell ${c.imageRef ? 'filled' : ''}" data-i="${c.index}"><span class="idx">${c.index}</span>${c.imageRef ? `<img src="${src}" alt="">` : ''}</div>`;
+      }).join('');
       applyHighlights();
       g.querySelectorAll('.cell').forEach((el) => {
         const i = Number(el.dataset.i);
         el.onmousedown = (e) => { e.preventDefault(); dragging = true; dragMoved = false; dragStart = i; selectCell(i); REGION = null; applyHighlights(); };
-        el.onmouseenter = (e) => { if (dragging && dragStart !== null) { dragMoved = true; setRegion(dragStart, i); applyHighlights(); } showPreview(i, e); };
+        el.onmouseenter = (e) => { if (dragging && dragStart !== null) { dragMoved = true; setRegion(dragStart, i); applyHighlights(); scheduleBgPreview(); } showPreview(i, e); };
         el.onmousemove = movePreview; el.onmouseleave = hidePreview;
       });
     }
     function applyHighlights() { if (!SHEET) return; document.querySelectorAll('#grid .cell').forEach((el) => { const i = Number(el.dataset.i); const cell = SHEET.cells.find((c) => c.index === i); el.classList.toggle('selected', i === SEL); el.classList.toggle('region', !!(REGION && cell.col >= REGION.c0 && cell.col <= REGION.c1 && cell.row >= REGION.r0 && cell.row <= REGION.r1)); }); }
     function setRegion(a, b) { const ca = SHEET.cells.find((c) => c.index === a), cb = SHEET.cells.find((c) => c.index === b); REGION = { c0: Math.min(ca.col, cb.col), c1: Math.max(ca.col, cb.col), r0: Math.min(ca.row, cb.row), r1: Math.max(ca.row, cb.row) }; }
     function regionCells() { return REGION ? SHEET.cells.filter((c) => c.col >= REGION.c0 && c.col <= REGION.c1 && c.row >= REGION.r0 && c.row <= REGION.r1).sort((a, b) => (a.row - b.row) || (a.col - b.col)) : []; }
+    function targetBgCells() { const cells = REGION ? regionCells() : (SEL !== null && SHEET ? [SHEET.cells.find((c) => c.index === SEL)] : []); return cells.filter((c) => c && c.imageRef); }
     function updateSelInfo() { if (REGION) { const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; $('selInfo').textContent = `区域 ${C}×${R}（${C * R} 格）`; } else if (SEL !== null && SHEET) { const c = SHEET.cells.find((x) => x.index === SEL); $('selInfo').textContent = `格子 ${SEL} (${c.col},${c.row})`; } else $('selInfo').textContent = '未选'; }
     function selectCell(i) { if (i === null || i === undefined) return; SEL = i; REGION = null; renderGrid(); const cell = SHEET.cells.find((c) => c.index === i); $('selInfo').textContent = `格子 ${i} (${cell.col},${cell.row})`; $('tagEdit').value = cell.tag || ''; scheduleBgPreview(); }
+    window.selectCell = selectCell;
 
     async function getImageDataUrl(url) { const blob = await (await fetch(url)).blob(); return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(blob); }); }
     function currentRefMode() { return document.querySelector('input[name=ref]:checked').value; }
@@ -163,7 +170,7 @@
     function shouldRemoveBg() { return $('removeBg').checked; }
     function selectedBgColor() { const n = parseInt(($('bgColor').value || '#ffffff').replace('#', ''), 16); return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 }; }
     async function resolveReference() { const mode = currentRefMode(); if (mode === 'upload') { const f = $('refUpload').files[0]; if (!f) return null; return await new Promise((res) => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); }); } if (mode === 'sub') return REF; if (mode === 'none') return false; return null; }
-    function renderSubPick() { const box = $('subPick'); const filled = SHEET.cells.filter((c) => c.imageRef); box.innerHTML = filled.length ? filled.map((c) => `<img src="${cellUrl(SHEET.id, c.index)}" data-i="${c.index}" style="width:48px;height:48px;object-fit:contain;image-rendering:pixelated;cursor:pointer;border:2px solid var(--border);border-radius:6px" title="格子${c.index}">`).join('') : '<span class="muted">本图暂无子图</span>'; box.querySelectorAll('img').forEach((im) => { im.onclick = async () => { REF = await getImageDataUrl(im.src); box.querySelectorAll('img').forEach((x) => (x.style.borderColor = 'var(--border)')); im.style.borderColor = 'var(--accent)'; }; }); }
+    function renderSubPick() { const box = $('subPick'); const filled = SHEET.cells.filter((c) => c.imageRef); box.innerHTML = filled.length ? filled.map((c) => `<img src="${BG_PREVIEW_CACHE.get(c.index) || cellUrl(SHEET.id, c.index)}" data-i="${c.index}" style="width:48px;height:48px;object-fit:contain;image-rendering:pixelated;cursor:pointer;border:2px solid var(--border);border-radius:6px" title="格子${c.index}">`).join('') : '<span class="muted">本图暂无子图</span>'; box.querySelectorAll('img').forEach((im) => { im.onclick = async () => { REF = await getImageDataUrl(im.src); box.querySelectorAll('img').forEach((x) => (x.style.borderColor = 'var(--border)')); im.style.borderColor = 'var(--accent)'; }; }); }
     document.querySelectorAll('input[name=ref]').forEach((r) => { r.onchange = () => { $('refUpload').style.display = r.value === 'upload' ? 'block' : 'none'; $('subPick').style.display = r.value === 'sub' ? 'flex' : 'none'; if (r.value === 'sub') renderSubPick(); }; });
 
     async function loadImageFromUrl(url) { const blob = await (await fetch(url, { cache: 'no-store' })).blob(); const objectUrl = URL.createObjectURL(blob); return await new Promise((resolve, reject) => { const img = new Image(); img.onload = () => { URL.revokeObjectURL(objectUrl); resolve(img); }; img.onerror = (e) => { URL.revokeObjectURL(objectUrl); reject(e); }; img.src = objectUrl; }); }
@@ -205,8 +212,11 @@
       const cv = document.createElement('canvas'); cv.width = img.naturalWidth || img.width || SHEET.cellSize; cv.height = img.naturalHeight || img.height || SHEET.cellSize;
       const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0, cv.width, cv.height);
       edgeColorToTransparent(cv, selectedBgColor(), bgTolerance());
-      const r = await api(`/api/sprites/${SHEET.id}/cells/${index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: cv.toDataURL('image/png').split(',')[1], tag }) });
-      const j = await r.json(); if (!j.ok) throw new Error(j.error || '底色转透明保存失败'); return j.meta;
+      const dataUrl = cv.toDataURL('image/png');
+      const r = await api(`/api/sprites/${SHEET.id}/cells/${index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: dataUrl.split(',')[1], tag }) });
+      const j = await r.json(); if (!j.ok) throw new Error(j.error || '底色转透明保存失败');
+      BG_PREVIEW_CACHE.set(index, dataUrl);
+      return j.meta;
     }
 
     async function makeProcessedPreviewDataUrl(index) {
@@ -220,62 +230,109 @@
       return cv.toDataURL('image/png');
     }
 
-    function applyPreviewToGrid(dataUrl) {
-      const img = document.querySelector(`#grid .cell.selected img`);
-      if (img && dataUrl) img.src = dataUrl;
+    function applyPreviewToGrid(index, dataUrl) {
+      if (!dataUrl) return;
+      BG_PREVIEW_CACHE.set(index, dataUrl);
+      const img = document.querySelector(`#grid .cell[data-i="${index}"] img`);
+      if (img) img.src = dataUrl;
     }
 
     async function updateBgPreview() {
       updateToleranceLabel();
       if (!shouldRemoveBg() || SEL === null) { clearBgPreview(); return; }
+      const targets = targetBgCells();
+      if (!targets.length) { clearBgPreview(); return; }
       try {
-        const dataUrl = await makeProcessedPreviewDataUrl(SEL);
+        let firstDataUrl = null;
+        for (const cell of targets) {
+          const dataUrl = await makeProcessedPreviewDataUrl(cell.index);
+          if (!firstDataUrl) firstDataUrl = dataUrl;
+          applyPreviewToGrid(cell.index, dataUrl);
+        }
         const cv = $('bgPreview');
         const ctx = cv.getContext('2d');
         ctx.clearRect(0, 0, cv.width, cv.height);
-        if (!dataUrl) return;
-        const img = new Image(); img.src = dataUrl; await img.decode();
+        if (!firstDataUrl) return;
+        const img = new Image(); img.src = firstDataUrl; await img.decode();
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(img, 0, 0, cv.width, cv.height);
-        applyPreviewToGrid(dataUrl);
       } catch {
         clearBgPreview();
       }
     }
 
-    function scheduleBgPreview() {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(updateBgPreview, 60);
-    }
+    function scheduleBgPreview() { clearTimeout(previewTimer); previewTimer = setTimeout(updateBgPreview, 60); }
 
-    document.addEventListener('mouseup', () => { if (!dragging) return; dragging = false; if (!dragMoved) REGION = null; updateSelInfo(); });
+    document.addEventListener('mouseup', () => { if (!dragging) return; dragging = false; if (!dragMoved) REGION = null; updateSelInfo(); scheduleBgPreview(); });
 
     async function generate(mode) {
       if (REGION) { await generateRegion(); return; }
       if (SEL === null) { $('opStatus').textContent = '请先选择一个格子'; return; }
       const prompt = $('prompt').value.trim(); if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; }
       $('opStatus').textContent = '生成中…'; const reference = await resolveReference(); const seed = $('seed').value ? Number($('seed').value) : undefined; const assetKind = currentAssetKind();
-      const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/${mode === 'replace' ? 'replace' : 'generate'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, assetKind }) });
+      const targetIndex = SEL;
+      BG_PREVIEW_CACHE.delete(targetIndex);
+      const r = await api(`/api/sprites/${SHEET.id}/cells/${targetIndex}/${mode === 'replace' ? 'replace' : 'generate'}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, assetKind }) });
       const j = await r.json(); if (!j.ok) { $('opStatus').textContent = '失败：' + (j.error || ''); return; }
-      SHEET = j.meta; const cell = SHEET.cells.find((c) => c.index === SEL);
-      if (assetKind === 'sprite' && shouldRemoveBg()) { $('opStatus').textContent = '生成完成，正在按当前范围边缘底色转透明…'; try { SHEET = await makeCellBgTransparent(SEL, cell.tag || buildAssetTag(assetKind, prompt)); } catch (e) { $('opStatus').textContent = '生成完成，但底色转透明失败：' + (e.message || e); renderGrid(); return; } }
-      renderGrid(); const updatedCell = SHEET.cells.find((c) => c.index === SEL); $('tagEdit').value = updatedCell.tag || ''; $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? '完成 ✓ 已按当前范围边缘底色转透明并写入 Tag' : '完成 ✓ 已自动写入 Tag'; scheduleBgPreview(); const next = SHEET.cells.find((c) => !c.imageRef); if (next) selectCell(next.index);
+      SHEET = j.meta; const cell = SHEET.cells.find((c) => c.index === targetIndex);
+      if (assetKind === 'sprite' && shouldRemoveBg()) { $('opStatus').textContent = '生成完成，正在按当前范围边缘底色转透明…'; try { SHEET = await makeCellBgTransparent(targetIndex, cell.tag || buildAssetTag(assetKind, prompt)); } catch (e) { $('opStatus').textContent = '生成完成，但底色转透明失败：' + (e.message || e); renderGrid(); return; } }
+      renderGrid(); const updatedCell = SHEET.cells.find((c) => c.index === targetIndex); $('tagEdit').value = updatedCell.tag || ''; $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? '完成 ✓ 已按当前范围边缘底色转透明并写入 Tag' : '完成 ✓ 已自动写入 Tag'; scheduleBgPreview(); const next = SHEET.cells.find((c) => !c.imageRef); if (next) selectCell(next.index);
     }
 
     function chooseSize(W, H) { const longSide = 1024; const ratio = W / H; let w = ratio >= 1 ? longSide : Math.round(longSide * ratio); let h = ratio >= 1 ? Math.round(longSide / ratio) : longSide; if (w < 512) { const s = 512 / w; w = 512; h = Math.round(h * s); } if (h < 512) { const s = 512 / h; h = 512; w = Math.round(w * s); } if (w > 2048) { const s = 2048 / w; w = 2048; h = Math.round(h * s); } if (h > 2048) { const s = 2048 / h; h = 2048; w = Math.round(w * s); } return { w: Math.round(w / 8) * 8, h: Math.round(h / 8) * 8 }; }
-    async function generateRegion() { const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; const cs = SHEET.cellSize; const W = C * cs, H = R * cs; const prompt = $('prompt').value.trim(); if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; } $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`; const reference = await resolveReference(); const seed = $('seed').value ? Number($('seed').value) : undefined; const assetKind = currentAssetKind(); const { w, h } = chooseSize(W, H); const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, width: w, height: h, assetKind }) }); const j = await r.json(); if (!j.image) { $('opStatus').textContent = '失败：' + (j.error || '无图'); return; } const img = new Image(); img.src = 'data:image/png;base64,' + j.image; await img.decode(); const big = document.createElement('canvas'); big.width = W; big.height = H; const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = false; bctx.drawImage(img, 0, 0, W, H); if (assetKind === 'sprite' && shouldRemoveBg()) edgeColorToTransparent(big, selectedBgColor(), bgTolerance()); const cells = regionCells(); const total = cells.length; for (let n = 0; n < cells.length; n++) { const cell = cells[n]; const cc = document.createElement('canvas'); cc.width = cs; cc.height = cs; const cctx = cc.getContext('2d'); cctx.imageSmoothingEnabled = false; const sx = (cell.col - REGION.c0) * cs; const sy = (cell.row - REGION.r0) * cs; cctx.drawImage(big, sx, sy, cs, cs, 0, 0, cs, cs); await api(`/api/sprites/${SHEET.id}/cells/${cell.index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: cc.toDataURL('image/png').split(',')[1], tag: buildAssetTag(assetKind, prompt, n + 1, total) }) }); } SHEET = await (await api('/api/sprites/' + SHEET.id)).json(); REGION = null; renderGrid(); updateSelInfo(); $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? `完成 ✓ 已铺满 ${C}×${R} 区域、编号 Tag 并按当前范围边缘底色转透明（${C * R} 格）` : `完成 ✓ 已铺满 ${C}×${R} 区域并编号 Tag（${C * R} 格）`; scheduleBgPreview(); }
+    async function generateRegion() {
+      const C = REGION.c1 - REGION.c0 + 1, R = REGION.r1 - REGION.r0 + 1; const cs = SHEET.cellSize; const W = C * cs, H = R * cs; const prompt = $('prompt').value.trim(); if (!prompt) { $('opStatus').textContent = '请填写提示词'; return; }
+      $('opStatus').textContent = `生成大图 (${C}×${R}) 中…`; const reference = await resolveReference(); const seed = $('seed').value ? Number($('seed').value) : undefined; const assetKind = currentAssetKind(); const { w, h } = chooseSize(W, H);
+      const r = await api(`/api/sprites/${SHEET.id}/generate-raw`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, reference, seed, width: w, height: h, assetKind }) }); const j = await r.json(); if (!j.image) { $('opStatus').textContent = '失败：' + (j.error || '无图'); return; }
+      const img = new Image(); img.src = 'data:image/png;base64,' + j.image; await img.decode();
+      const big = document.createElement('canvas'); big.width = W; big.height = H; const bctx = big.getContext('2d'); bctx.imageSmoothingEnabled = false; bctx.drawImage(img, 0, 0, W, H); if (assetKind === 'sprite' && shouldRemoveBg()) edgeColorToTransparent(big, selectedBgColor(), bgTolerance());
+      const cells = regionCells(); const total = cells.length;
+      for (let n = 0; n < cells.length; n++) {
+        const cell = cells[n]; const cc = document.createElement('canvas'); cc.width = cs; cc.height = cs; const cctx = cc.getContext('2d'); cctx.imageSmoothingEnabled = false; const sx = (cell.col - REGION.c0) * cs; const sy = (cell.row - REGION.r0) * cs; cctx.drawImage(big, sx, sy, cs, cs, 0, 0, cs, cs);
+        BG_PREVIEW_CACHE.delete(cell.index);
+        await api(`/api/sprites/${SHEET.id}/cells/${cell.index}/image`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: cc.toDataURL('image/png').split(',')[1], tag: buildAssetTag(assetKind, prompt, n + 1, total) }) });
+      }
+      SHEET = await (await api('/api/sprites/' + SHEET.id)).json(); REGION = null; renderGrid(); updateSelInfo(); $('opStatus').textContent = assetKind === 'sprite' && shouldRemoveBg() ? `完成 ✓ 已铺满 ${C}×${R} 区域、编号 Tag 并按当前范围边缘底色转透明（${C * R} 格）` : `完成 ✓ 已铺满 ${C}×${R} 区域并编号 Tag（${C * R} 格）`; scheduleBgPreview();
+    }
 
     $('genBtn').onclick = () => generate('generate'); $('replaceBtn').onclick = () => generate('replace');
-    $('delBtn').onclick = async () => { const targets = REGION ? regionCells().map((c) => c.index) : (SEL !== null ? [SEL] : []); if (!targets.length) return; for (const i of targets) { const r = await api(`/api/sprites/${SHEET.id}/cells/${i}`, { method: 'DELETE' }); const j = await r.json(); if (j.ok) SHEET = j.meta; } REGION = null; renderGrid(); updateSelInfo(); $('tagEdit').value = ''; $('opStatus').textContent = '已删除'; clearBgPreview(); };
+    $('delBtn').onclick = async () => { const targets = REGION ? regionCells().map((c) => c.index) : (SEL !== null ? [SEL] : []); if (!targets.length) return; for (const i of targets) { const r = await api(`/api/sprites/${SHEET.id}/cells/${i}`, { method: 'DELETE' }); const j = await r.json(); if (j.ok) SHEET = j.meta; BG_PREVIEW_CACHE.delete(i); } REGION = null; renderGrid(); updateSelInfo(); $('tagEdit').value = ''; $('opStatus').textContent = '已删除'; clearBgPreview(); };
     $('saveTagBtn').onclick = async () => { if (SEL === null) return; const r = await api(`/api/sprites/${SHEET.id}/cells/${SEL}/tag`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ tag: $('tagEdit').value }) }); const j = await r.json(); if (j.ok) { SHEET = j.meta; $('opStatus').textContent = 'Tag 已保存'; } };
-    $('applyBgBtn').onclick = async () => { if (SEL === null || !SHEET) return; const cell = SHEET.cells.find((c) => c.index === SEL); if (!cell || !cell.imageRef) { $('opStatus').textContent = '当前格没有图片可处理'; return; } $('opStatus').textContent = '正在按当前范围重新处理选中格…'; try { SHEET = await makeCellBgTransparent(SEL, cell.tag || ''); renderGrid(); selectCell(SEL); $('opStatus').textContent = '完成 ✓ 已按当前范围重新处理选中格'; } catch (e) { $('opStatus').textContent = '重新处理失败：' + (e.message || e); } };
+    $('applyBgBtn').onclick = async () => {
+      if (SEL === null || !SHEET) return;
+      const targets = targetBgCells();
+      if (!targets.length) { $('opStatus').textContent = '当前选中格/区域没有图片可处理'; return; }
+      $('opStatus').textContent = `正在按当前范围重新处理 ${targets.length} 个格子…`;
+      try {
+        for (const cell of targets) SHEET = await makeCellBgTransparent(cell.index, cell.tag || '');
+        renderGrid(); applyHighlights(); updateSelInfo(); $('opStatus').textContent = `完成 ✓ 已按当前范围重新处理 ${targets.length} 个格子`;
+      } catch (e) { $('opStatus').textContent = '重新处理失败：' + (e.message || e); }
+    };
     $('bgTolerance').oninput = () => { updateToleranceLabel(); scheduleBgPreview(); };
     $('bgColor').oninput = scheduleBgPreview;
     $('removeBg').onchange = scheduleBgPreview;
 
     function crc32(buf) { let table = crc32._t; if (!table) { table = crc32._t = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; table[n] = c >>> 0; } } let crc = 0xFFFFFFFF; for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ table[(crc ^ buf[i]) & 0xFF]; return (crc ^ 0xFFFFFFFF) >>> 0; }
-    function makeZip(files) { const enc = new TextEncoder(); const chunks = [], central = []; let offset = 0; for (const f of files) { const nameBytes = enc.encode(f.name); const data = f.data instanceof Uint8Array ? f.data : enc.encode(f.data); const crc = crc32(data); const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0, true); lh.setUint16(8, 0, true); lh.setUint16(10, 0, true); lh.setUint16(12, 0, true); lh.setUint32(14, crc, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, nameBytes.length, true); lh.setUint16(28, 0, true); chunks.push(new Uint8Array(lh.buffer), nameBytes, data); const ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0, true); ch.setUint16(10, 0, true); ch.setUint16(12, 0, true); ch.setUint16(14, 0, true); ch.setUint32(16, crc, true); ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, nameBytes.length, true); ch.setUint16(30, 0, true); ch.setUint16(32, 0, true); ch.setUint16(34, 0, true); ch.setUint16(36, 0, true); ch.setUint32(38, 0, true); ch.setUint32(42, offset, true); central.push(new Uint8Array(ch.buffer), nameBytes); offset += 30 + nameBytes.length + data.length; } const centralSize = central.reduce((s, c) => s + c.length, 0); const end = new DataView(new ArrayBuffer(22)); end.setUint32(0, 0x06054b50, true); end.setUint16(4, 0, true); end.setUint16(6, 0, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, centralSize, true); end.setUint32(16, offset, true); end.setUint16(20, 0, true); return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' }); }
-    $('exportBtn').onclick = async () => { if (!SHEET) return; const cs = SHEET.cellSize; const cv = document.createElement('canvas'); cv.width = SHEET.cols * cs; cv.height = SHEET.rows * cs; const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false; for (const c of SHEET.cells) { if (!c.imageRef) continue; const img = new Image(); img.src = cellUrl(SHEET.id, c.index); await img.decode(); ctx.drawImage(img, c.col * cs, c.row * cs, cs, cs); } const pngBlob = await new Promise((r) => cv.toBlob(r, 'image/png')); const pngBytes = new Uint8Array(await pngBlob.arrayBuffer()); const meta = await (await api('/api/sprites/' + SHEET.id)).json(); const skillText = await (await api('/api/sprites/' + SHEET.id + '/skill')).text().catch(() => ''); const folder = (SHEET.name || 'sheet').replace(/[\\/:*?"<>|]/g, '_'); const zip = makeZip([{ name: `${folder}/${folder}.png`, data: pngBytes }, { name: `${folder}/meta.json`, data: JSON.stringify(meta, null, 2) }, { name: `${folder}/SKILL.md`, data: skillText }]); const a = document.createElement('a'); a.download = `${folder}.zip`; a.href = URL.createObjectURL(zip); a.click(); URL.revokeObjectURL(a.href); };
+    function makeZip(files) {
+      const enc = new TextEncoder(); const chunks = [], central = []; let offset = 0;
+      for (const f of files) {
+        const nameBytes = enc.encode(f.name); const data = f.data instanceof Uint8Array ? f.data : enc.encode(f.data); const crc = crc32(data);
+        const lh = new DataView(new ArrayBuffer(30)); lh.setUint32(0, 0x04034b50, true); lh.setUint16(4, 20, true); lh.setUint16(6, 0x0800, true); lh.setUint16(8, 0, true); lh.setUint16(10, 0, true); lh.setUint16(12, 0, true); lh.setUint32(14, crc, true); lh.setUint32(18, data.length, true); lh.setUint32(22, data.length, true); lh.setUint16(26, nameBytes.length, true); lh.setUint16(28, 0, true);
+        chunks.push(new Uint8Array(lh.buffer), nameBytes, data);
+        const ch = new DataView(new ArrayBuffer(46)); ch.setUint32(0, 0x02014b50, true); ch.setUint16(4, 20, true); ch.setUint16(6, 20, true); ch.setUint16(8, 0x0800, true); ch.setUint16(10, 0, true); ch.setUint16(12, 0, true); ch.setUint16(14, 0, true); ch.setUint32(16, crc, true); ch.setUint32(20, data.length, true); ch.setUint32(24, data.length, true); ch.setUint16(28, nameBytes.length, true); ch.setUint16(30, 0, true); ch.setUint16(32, 0, true); ch.setUint16(34, 0, true); ch.setUint16(36, 0, true); ch.setUint32(38, 0, true); ch.setUint32(42, offset, true);
+        central.push(new Uint8Array(ch.buffer), nameBytes); offset += 30 + nameBytes.length + data.length;
+      }
+      const centralSize = central.reduce((s, c) => s + c.length, 0); const end = new DataView(new ArrayBuffer(22)); end.setUint32(0, 0x06054b50, true); end.setUint16(4, 0, true); end.setUint16(6, 0, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true); end.setUint32(12, centralSize, true); end.setUint32(16, offset, true); end.setUint16(20, 0, true); return new Blob([...chunks, ...central, new Uint8Array(end.buffer)], { type: 'application/zip' });
+    }
+    $('exportBtn').onclick = async () => {
+      if (!SHEET) return;
+      const cs = SHEET.cellSize; const cv = document.createElement('canvas'); cv.width = SHEET.cols * cs; cv.height = SHEET.rows * cs; const ctx = cv.getContext('2d'); ctx.imageSmoothingEnabled = false;
+      for (const c of SHEET.cells) {
+        if (!c.imageRef) continue;
+        const img = new Image(); img.src = BG_PREVIEW_CACHE.get(c.index) || cellUrl(SHEET.id, c.index); await img.decode(); ctx.drawImage(img, c.col * cs, c.row * cs, cs, cs);
+      }
+      const pngBlob = await new Promise((r) => cv.toBlob(r, 'image/png')); const pngBytes = new Uint8Array(await pngBlob.arrayBuffer()); const meta = await (await api('/api/sprites/' + SHEET.id)).json(); const skillText = await (await api('/api/sprites/' + SHEET.id + '/skill')).text().catch(() => ''); const folder = (SHEET.name || 'sheet').replace(/[\/:*?"<>|]/g, '_'); const zip = makeZip([{ name: `${folder}/${folder}.png`, data: pngBytes }, { name: `${folder}/meta.json`, data: JSON.stringify(meta, null, 2) }, { name: `${folder}/SKILL.md`, data: skillText }]); const a = document.createElement('a'); a.download = `${folder}.zip`; a.href = URL.createObjectURL(zip); a.click(); URL.revokeObjectURL(a.href);
+    };
     $('skillBtn').onclick = () => { if (SHEET) window.open(Project.withProject(`/api/sprites/${SHEET.id}/skill`), '_blank'); };
 
     $('newBtn').onclick = () => { $('newForm').style.display = 'block'; };
