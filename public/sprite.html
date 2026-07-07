@@ -60,18 +60,20 @@
       </div>
       <p class="muted" style="margin-top:6px">自动参考会在当前项目内按类型查找：非地块参考首个非地块，地块参考首个地块。</p>
 
-      <label>背景处理</label>
-      <div class="row" style="align-items:center">
-        <label style="margin:0"><input id="removeBg" type="checkbox" checked style="width:auto;margin-right:6px" />非地块生成后底色转透明</label>
-        <label style="margin:0;display:flex;align-items:center;gap:6px">底色 <input id="bgColor" type="color" value="#ffffff" style="width:44px;height:34px;padding:2px;margin:0" /></label>
+      <div id="bgAdjustSection">
+        <label>背景处理</label>
+        <div class="row" style="align-items:center">
+          <label style="margin:0"><input id="removeBg" type="checkbox" checked style="width:auto;margin-right:6px" />非地块生成后底色转透明</label>
+          <label style="margin:0;display:flex;align-items:center;gap:6px">底色 <input id="bgColor" type="color" value="#ffffff" style="width:44px;height:34px;padding:2px;margin:0" /></label>
+        </div>
+        <label>相近色范围：<span id="bgToleranceValue">24</span></label>
+        <input id="bgTolerance" type="range" min="0" max="255" step="1" value="24" />
+        <div class="row" style="align-items:center;margin-top:8px">
+          <canvas id="bgPreview" class="bg-preview" width="96" height="96"></canvas>
+          <button class="ghost" id="applyBgBtn">按当前范围重新处理选中格/区域</button>
+        </div>
+        <p class="muted" style="margin-top:6px">滑动时会实时预览并临时刷新上方选中格或框选区域显示；导出会优先使用这些预览图。点击重新处理才会写回文件。处理只替换从画布边缘或透明外部连通进去的相近底色。</p>
       </div>
-      <label>相近色范围：<span id="bgToleranceValue">24</span></label>
-      <input id="bgTolerance" type="range" min="0" max="255" step="1" value="24" />
-      <div class="row" style="align-items:center;margin-top:8px">
-        <canvas id="bgPreview" class="bg-preview" width="96" height="96"></canvas>
-        <button class="ghost" id="applyBgBtn">按当前范围重新处理选中格/区域</button>
-      </div>
-      <p class="muted" style="margin-top:6px">滑动时会实时预览并临时刷新上方选中格或框选区域显示；导出会优先使用这些预览图。点击重新处理才会写回文件。处理只替换从画布边缘或透明外部连通进去的相近底色。</p>
 
       <label>参考图</label>
       <div class="row">
@@ -333,7 +335,7 @@
         if (!c.imageRef) continue;
         const img = new Image(); img.src = BG_PREVIEW_CACHE.get(c.index) || cellUrl(SHEET.id, c.index); await img.decode(); ctx.drawImage(img, c.col * cs, c.row * cs, cs, cs);
       }
-      const pngBlob = await new Promise((r) => cv.toBlob(r, 'image/png')); const pngBytes = new Uint8Array(await pngBlob.arrayBuffer()); const meta = await (await api('/api/sprites/' + SHEET.id)).json(); const skillText = await (await api('/api/sprites/' + SHEET.id + '/skill')).text().catch(() => ''); const folder = (SHEET.name || 'sheet').replace(/[\/:*?"<>|]/g, '_'); const zip = makeZip([{ name: `${folder}/${folder}.png`, data: pngBytes }, { name: `${folder}/meta.json`, data: JSON.stringify(meta, null, 2) }, { name: `${folder}/SKILL.md`, data: skillText }]); const a = document.createElement('a'); a.download = `${folder}.zip`; a.href = URL.createObjectURL(zip); a.click(); URL.revokeObjectURL(a.href);
+      const pngBlob = await new Promise((r) => cv.toBlob(r, 'image/png')); const pngBytes = new Uint8Array(await pngBlob.arrayBuffer()); const meta = await (await api('/api/sprites/' + SHEET.id)).json(); const skillText = await (await api('/api/sprites/' + SHEET.id + '/skill')).text().catch(() => ''); const folder = (SHEET.name || 'sheet').replace(/[\\/:*?"<>|]/g, '_'); const zip = makeZip([{ name: `${folder}/${folder}.png`, data: pngBytes }, { name: `${folder}/meta.json`, data: JSON.stringify(meta, null, 2) }, { name: `${folder}/SKILL.md`, data: skillText }]); const a = document.createElement('a'); a.download = `${folder}.zip`; a.href = URL.createObjectURL(zip); a.click(); URL.revokeObjectURL(a.href);
     };
     $('skillBtn').onclick = () => { if (SHEET) window.open(Project.withProject(`/api/sprites/${SHEET.id}/skill`), '_blank'); };
 
