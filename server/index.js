@@ -348,6 +348,26 @@ app.get('/api/walks/:id/image', async (req, res) => {
   }
 });
 
+app.put('/api/walks/:id', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    const { name } = req.body || {};
+    const meta = await walks.renameWalk(projectId, req.params.id, name);
+    res.json({ ok: true, meta });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/walks/:id', async (req, res) => {
+  try {
+    const projectId = await requireProjectId(req);
+    res.json(await walks.deleteWalk(projectId, req.params.id));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/walks/prompt-preview', async (req, res) => {
   try {
     const projectId = await requireProjectId(req);
