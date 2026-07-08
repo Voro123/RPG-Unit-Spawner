@@ -262,9 +262,7 @@
     const sprite = isSpriteAssetKind();
     wrap.style.opacity = sprite ? '1' : '.55';
     checkbox.disabled = !sprite;
-    note.textContent = sprite
-      ? '发送时追加“主体尽量占满当前选区”的英文约束'
-      : '地块模式不生效';
+    note.textContent = sprite ? '生成时追加占满选区约束' : '地块模式不生效';
   }
 
   function insertAfter(reference, node) {
@@ -273,32 +271,46 @@
     return true;
   }
 
+  function assetKindAnchor(spriteRadio) {
+    const label = spriteRadio?.closest('label');
+    const radioGroup = label?.parentElement;
+    if (radioGroup?.querySelectorAll?.('input[name="assetKind"]').length >= 2) return radioGroup;
+    return spriteRadio?.closest('.row') || radioGroup || label;
+  }
+
   function injectFillOptionUi() {
     if ($('spriteFillAreaPromptWrap')) return true;
     const spriteRadio = document.querySelector('input[name="assetKind"][value="sprite"]');
-    const radioRow = spriteRadio?.closest('.row') || spriteRadio?.closest('label')?.parentElement;
     const promptInput = $('prompt') || document.querySelector('textarea');
     const fallbackHost = promptInput?.parentElement;
-    const host = radioRow || fallbackHost;
-    if (!host) return false;
+    const anchor = assetKindAnchor(spriteRadio) || fallbackHost;
+    if (!anchor) return false;
 
-    const wrap = document.createElement('label');
+    const wrap = document.createElement('div');
     wrap.id = 'spriteFillAreaPromptWrap';
-    wrap.style.display = 'flex';
-    wrap.style.alignItems = 'center';
-    wrap.style.gap = '8px';
-    wrap.style.margin = '6px 0 0 0';
-    wrap.style.padding = '0';
-    wrap.style.maxWidth = 'none';
-    wrap.style.cursor = 'pointer';
-    wrap.style.fontSize = '13px';
-    wrap.className = 'muted';
+    wrap.className = 'sprite-fill-area-prompt-wrap';
+    wrap.style.cssText = [
+      'display:block',
+      'width:100%',
+      'max-width:100%',
+      'box-sizing:border-box',
+      'grid-column:1 / -1',
+      'flex:0 0 100%',
+      'clear:both',
+      'margin:8px 0 0 0',
+      'padding:0'
+    ].join(';');
     wrap.innerHTML = `
-      <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0" />
-      <span><strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong><span id="spriteFillAreaPromptNote" style="margin-left:8px"></span></span>
+      <label id="spriteFillAreaPromptLabel" for="spriteFillAreaPrompt" class="muted" style="display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;gap:8px!important;width:auto!important;max-width:100%!important;margin:0!important;padding:0!important;cursor:pointer;line-height:1.35;font-size:13px;white-space:normal">
+        <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0;flex:0 0 auto" />
+        <span style="display:inline-flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0">
+          <strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong>
+          <span id="spriteFillAreaPromptNote" style="font-size:12px;color:var(--muted,#9ca3af)"></span>
+        </span>
+      </label>
     `;
 
-    if (!insertAfter(host, wrap) && fallbackHost) fallbackHost.appendChild(wrap);
+    if (!insertAfter(anchor, wrap) && fallbackHost) fallbackHost.appendChild(wrap);
 
     const checkbox = $('spriteFillAreaPrompt');
     checkbox.checked = fillOptionEnabled();
