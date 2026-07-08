@@ -14,6 +14,14 @@
     document.head.appendChild(script);
   }
 
+  function ensureUndoRedoScript() {
+    if ($('pixelEditorUndoRedoScript')) return;
+    const script = document.createElement('script');
+    script.id = 'pixelEditorUndoRedoScript';
+    script.src = '/pixel-editor-undo-redo.js';
+    document.head.appendChild(script);
+  }
+
   function projectId() {
     return localStorage.getItem('rpg-unit-spawner.projectId') || '';
   }
@@ -236,6 +244,7 @@
     if (!injectControls()) return false;
     installed = true;
     ensureRegenerateSyncScript();
+    ensureUndoRedoScript();
     document.addEventListener('change', (e) => {
       if (e.target?.id === 'sheetSel') metaCache = new Map();
     }, true);
