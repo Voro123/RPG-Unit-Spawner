@@ -260,36 +260,46 @@
     const note = $('spriteFillAreaPromptNote');
     if (!wrap || !checkbox || !note) return;
     const sprite = isSpriteAssetKind();
-    wrap.style.opacity = sprite ? '1' : '.6';
+    wrap.style.opacity = sprite ? '1' : '.55';
     checkbox.disabled = !sprite;
     note.textContent = sprite
-      ? '仅对非地块生图生效。会在发送给 AI 的最终提示词后追加“主体尽量占满当前所选格区域”的英文约束。'
-      : '当前为地块模式，此选项不会生效。';
+      ? '发送时追加“主体尽量占满当前选区”的英文约束'
+      : '地块模式不生效';
+  }
+
+  function insertAfter(reference, node) {
+    if (!reference?.parentElement) return false;
+    reference.parentElement.insertBefore(node, reference.nextSibling);
+    return true;
   }
 
   function injectFillOptionUi() {
     if ($('spriteFillAreaPromptWrap')) return true;
     const spriteRadio = document.querySelector('input[name="assetKind"][value="sprite"]');
+    const radioRow = spriteRadio?.closest('.row') || spriteRadio?.closest('label')?.parentElement;
     const promptInput = $('prompt') || document.querySelector('textarea');
-    const host = spriteRadio?.closest('label')?.parentElement || spriteRadio?.closest('.row') || promptInput?.parentElement;
+    const fallbackHost = promptInput?.parentElement;
+    const host = radioRow || fallbackHost;
     if (!host) return false;
-    const wrap = document.createElement('div');
+
+    const wrap = document.createElement('label');
     wrap.id = 'spriteFillAreaPromptWrap';
-    wrap.style.marginTop = '8px';
-    wrap.style.padding = '8px 10px';
-    wrap.style.border = '1px solid var(--border, #444)';
-    wrap.style.borderRadius = '8px';
-    wrap.style.background = 'rgba(255,255,255,.03)';
+    wrap.style.display = 'flex';
+    wrap.style.alignItems = 'center';
+    wrap.style.gap = '8px';
+    wrap.style.margin = '6px 0 0 0';
+    wrap.style.padding = '0';
+    wrap.style.maxWidth = 'none';
+    wrap.style.cursor = 'pointer';
+    wrap.style.fontSize = '13px';
+    wrap.className = 'muted';
     wrap.innerHTML = `
-      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
-        <input id="spriteFillAreaPrompt" type="checkbox" />
-        <span>
-          <div style="font-weight:700">非地块尽量占满格子（提示词增强）</div>
-          <div id="spriteFillAreaPromptNote" class="muted" style="font-size:12px;margin-top:2px"></div>
-        </span>
-      </label>
+      <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0" />
+      <span><strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong><span id="spriteFillAreaPromptNote" style="margin-left:8px"></span></span>
     `;
-    host.appendChild(wrap);
+
+    if (!insertAfter(host, wrap) && fallbackHost) fallbackHost.appendChild(wrap);
+
     const checkbox = $('spriteFillAreaPrompt');
     checkbox.checked = fillOptionEnabled();
     checkbox.addEventListener('change', () => {
