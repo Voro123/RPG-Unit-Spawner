@@ -292,7 +292,7 @@
     wrap.style.marginTop = '8px';
     wrap.innerHTML = `
       <label id="spriteFillAreaPromptLabel" for="spriteFillAreaPrompt" class="muted" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;line-height:1.35;font-size:13px">
-        <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0" />
+        <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0;width:auto" />
         <span><strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong><span id="spriteFillAreaPromptNote" style="margin-left:8px;font-size:12px;color:var(--muted,#9ca3af)"></span></span>
       </label>
     `;
