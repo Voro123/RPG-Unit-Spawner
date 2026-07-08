@@ -6,6 +6,14 @@
 
   function $(id) { return document.getElementById(id); }
 
+  function ensureRegenerateSyncScript() {
+    if ($('pixelEditorRegenerateSyncScript')) return;
+    const script = document.createElement('script');
+    script.id = 'pixelEditorRegenerateSyncScript';
+    script.src = '/pixel-editor-regenerate-sync.js';
+    document.head.appendChild(script);
+  }
+
   function projectId() {
     return localStorage.getItem('rpg-unit-spawner.projectId') || '';
   }
@@ -227,6 +235,7 @@
     if (installed) return true;
     if (!injectControls()) return false;
     installed = true;
+    ensureRegenerateSyncScript();
     document.addEventListener('change', (e) => {
       if (e.target?.id === 'sheetSel') metaCache = new Map();
     }, true);
