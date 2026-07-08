@@ -288,25 +288,12 @@
 
     const wrap = document.createElement('div');
     wrap.id = 'spriteFillAreaPromptWrap';
-    wrap.className = 'sprite-fill-area-prompt-wrap';
-    wrap.style.cssText = [
-      'display:block',
-      'width:100%',
-      'max-width:100%',
-      'box-sizing:border-box',
-      'grid-column:1 / -1',
-      'flex:0 0 100%',
-      'clear:both',
-      'margin:8px 0 0 0',
-      'padding:0'
-    ].join(';');
+    wrap.className = 'row sprite-fill-area-prompt-wrap';
+    wrap.style.marginTop = '8px';
     wrap.innerHTML = `
-      <label id="spriteFillAreaPromptLabel" for="spriteFillAreaPrompt" class="muted" style="display:inline-flex!important;align-items:center!important;justify-content:flex-start!important;gap:8px!important;width:auto!important;max-width:100%!important;margin:0!important;padding:0!important;cursor:pointer;line-height:1.35;font-size:13px;white-space:normal">
-        <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0;flex:0 0 auto" />
-        <span style="display:inline-flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0">
-          <strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong>
-          <span id="spriteFillAreaPromptNote" style="font-size:12px;color:var(--muted,#9ca3af)"></span>
-        </span>
+      <label id="spriteFillAreaPromptLabel" for="spriteFillAreaPrompt" class="muted" style="display:flex;align-items:center;gap:8px;cursor:pointer;margin:0;line-height:1.35;font-size:13px">
+        <input id="spriteFillAreaPrompt" type="checkbox" style="margin:0" />
+        <span><strong style="color:var(--text,#e5e7eb);font-weight:650">非地块尽量占满格子</strong><span id="spriteFillAreaPromptNote" style="margin-left:8px;font-size:12px;color:var(--muted,#9ca3af)"></span></span>
       </label>
     `;
 
