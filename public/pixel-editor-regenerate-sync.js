@@ -2,6 +2,7 @@
   const SESSION_PREVIEW_CACHE = window.__RpgCellPreviewCache || (window.__RpgCellPreviewCache = new Map());
   const DIRTY_PIXEL_CACHE = window.__RpgDirtyPixelCache || (window.__RpgDirtyPixelCache = new Map());
   const REFRESH_DELAYS = [0, 80, 180, 360, 720, 1200, 2000, 3200];
+  const CLEAR_DELAYS = [0, 60, 180, 420, 900, 1600];
   const activeRefreshes = new Map();
   let installed = false;
 
@@ -48,9 +49,19 @@
     return { sheetId: decodeURIComponent(m[1]), index: Number(m[2]), action: 'image', kind: 'write' };
   }
 
+  function parseCellDeleteUrl(input) {
+    const raw = typeof input === 'string' ? input : input?.url || '';
+    if (!raw) return null;
+    const path = raw.startsWith('http') ? new URL(raw).pathname : raw.split('?')[0];
+    const m = path.match(/\/api\/sprites\/([^/]+)\/cells\/(\d+)$/);
+    if (!m) return null;
+    return { sheetId: decodeURIComponent(m[1]), index: Number(m[2]), action: 'delete', kind: 'delete' };
+  }
+
   function parseChangedCellUrl(input, method) {
     if (method === 'POST') return parseCellGenerateUrl(input);
     if (method === 'PUT') return parseCellImageWriteUrl(input);
+    if (method === 'DELETE') return parseCellDeleteUrl(input);
     return null;
   }
 
@@ -58,6 +69,7 @@
     const key = cellKey(sheetId, index);
     SESSION_PREVIEW_CACHE.delete(key);
     DIRTY_PIXEL_CACHE.delete(key);
+    activeRefreshes.delete(key);
   }
 
   async function blobToDataUrl(blob) {
@@ -93,6 +105,25 @@
     return img;
   }
 
+  function clearGridCell(index) {
+    const cellEl = document.querySelector(`#grid .cell[data-i="${index}"]`);
+    if (!cellEl) return;
+    cellEl.classList.remove('filled');
+    cellEl.querySelectorAll('img').forEach((img) => img.remove());
+  }
+
+  function clearEditorIfRelevant(sheetId, index) {
+    if (currentSheetId() !== sheetId || selectedIndex() !== Number(index)) return;
+    const canvas = $('pixelEditorCanvas');
+    if (canvas) {
+      const w = canvas.width || 32;
+      const h = canvas.height || 32;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, w, h);
+    }
+    if ($('pixelEditorMeta')) $('pixelEditorMeta').textContent = `格子 ${index} 已删除。`;
+  }
+
   function setEditorCanvasFromDataUrl(sheetId, index, dataUrl) {
     if (currentSheetId() !== sheetId || selectedIndex() !== Number(index)) return;
     const canvas = $('pixelEditorCanvas');
@@ -122,6 +153,7 @@
   async function refreshChangedCellNow(sheetId, index, token, attempt) {
     if (activeRefreshes.get(cellKey(sheetId, index)) !== token) return false;
     clearCellCaches(sheetId, index);
+    activeRefreshes.set(cellKey(sheetId, index), token);
     try {
       const dataUrl = await fetchCellDataUrl(sheetId, index);
       if (activeRefreshes.get(cellKey(sheetId, index)) !== token) return true;
@@ -142,6 +174,7 @@
     const token = `${Date.now()}:${Math.random()}`;
     activeRefreshes.set(key, token);
     clearCellCaches(sheetId, index);
+    activeRefreshes.set(key, token);
 
     REFRESH_DELAYS.forEach((delay, attempt) => {
       setTimeout(async () => {
@@ -152,6 +185,22 @@
     });
   }
 
+  function invalidateDeletedCell(sheetId, index) {
+    const key = cellKey(sheetId, index);
+    const token = `${Date.now()}:${Math.random()}`;
+    activeRefreshes.set(key, token);
+    CLEAR_DELAYS.forEach((delay) => {
+      setTimeout(() => {
+        if (activeRefreshes.get(key) !== token) return;
+        clearCellCaches(sheetId, index);
+        clearGridCell(index);
+        clearEditorIfRelevant(sheetId, index);
+        activeRefreshes.set(key, token);
+      }, delay);
+    });
+    setTimeout(() => activeRefreshes.delete(key), Math.max(...CLEAR_DELAYS) + 80);
+  }
+
   function patchFetch() {
     if (window.fetch.__pixelRegenerateSyncPatched) return;
     const originalFetch = window.fetch.bind(window);
@@ -160,7 +209,8 @@
       const target = parseChangedCellUrl(input, method);
       const response = await originalFetch(input, init);
       if (target && response.ok) {
-        invalidateGeneratedCell(target.sheetId, target.index);
+        if (target.kind === 'delete') invalidateDeletedCell(target.sheetId, target.index);
+        else invalidateGeneratedCell(target.sheetId, target.index);
       }
       return response;
     };
