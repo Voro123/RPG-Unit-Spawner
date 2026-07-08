@@ -4,6 +4,7 @@
   const REFRESH_DELAYS = [0, 80, 180, 360, 720, 1200, 2000, 3200];
   const CLEAR_DELAYS = [0, 60, 180, 420, 900, 1600];
   const activeRefreshes = new Map();
+  const FILL_OPTION_KEY = 'rpg-unit-spawner.spriteFillSelectedAreaPrompt.v1';
   let installed = false;
 
   function $(id) { return document.getElementById(id); }
@@ -23,6 +24,26 @@
   function selectedIndex() {
     const el = document.querySelector('#grid .cell.selected');
     return el ? Number(el.dataset.i) : null;
+  }
+
+  function currentAssetKind() {
+    return document.querySelector('input[name="assetKind"]:checked')?.value || 'sprite';
+  }
+
+  function isSpriteAssetKind() {
+    return currentAssetKind() === 'sprite';
+  }
+
+  function fillOptionEnabled() {
+    return localStorage.getItem(FILL_OPTION_KEY) === '1';
+  }
+
+  function setFillOptionEnabled(enabled) {
+    localStorage.setItem(FILL_OPTION_KEY, enabled ? '1' : '0');
+  }
+
+  function setStatus(text) {
+    if ($('opStatus')) $('opStatus').textContent = text;
   }
 
   function cellImageUrl(sheetId, index) {
@@ -150,6 +171,141 @@
     if (loadBtn) loadBtn.click();
   }
 
+  function selectedRegionCells() {
+    const region = Array.from(document.querySelectorAll('#grid .cell.region'));
+    if (region.length) return region;
+    const selected = document.querySelector('#grid .cell.selected');
+    return selected ? [selected] : [];
+  }
+
+  function selectedRegionSize() {
+    const cells = selectedRegionCells();
+    if (!cells.length) return { width: 1, height: 1, count: 1 };
+    const xs = [];
+    const ys = [];
+    for (const cell of cells) {
+      const rect = cell.getBoundingClientRect();
+      xs.push(Math.round(rect.left));
+      ys.push(Math.round(rect.top));
+    }
+    const width = Math.max(1, new Set(xs).size);
+    const height = Math.max(1, new Set(ys).size);
+    return { width, height, count: cells.length };
+  }
+
+  function fillPromptAddon() {
+    const { width, height, count } = selectedRegionSize();
+    const areaText = count > 1 ? `${width} cells wide by ${height} cells tall` : 'single-cell';
+    return [
+      'Composition constraint for non-tile asset generation:',
+      `This asset should visually fill the selected ${areaText} canvas area as much as possible.`,
+      'Scale the main subject up so it occupies most of the frame, roughly 85% to 95% of the available width and height while remaining fully visible.',
+      count > 1
+        ? 'If multiple cells are selected, the subject should span the full selected area instead of appearing only one-cell tall or leaving a large empty region.'
+        : 'Do not render a tiny centered object with large empty margins around it.',
+      'Minimize empty transparent or background padding. Keep the subject close to the top, bottom, left, and right bounds without being cropped.'
+    ].join(' ');
+  }
+
+  function appendAddonToPrompt(prompt, addon) {
+    if (typeof prompt !== 'string' || !prompt.trim()) return { changed: false, value: prompt };
+    if (prompt.includes('Composition constraint for non-tile asset generation:')) return { changed: false, value: prompt };
+    return { changed: true, value: `${prompt.trim()}\n\n${addon}` };
+  }
+
+  function injectPromptAddonIntoPayload(payload, addon) {
+    let changed = false;
+    function visit(node) {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach(visit);
+        return;
+      }
+      for (const key of ['prompt', 'finalPrompt', 'final_prompt', 'translatedPrompt']) {
+        if (typeof node[key] === 'string') {
+          const next = appendAddonToPrompt(node[key], addon);
+          if (next.changed) {
+            node[key] = next.value;
+            changed = true;
+          }
+        }
+      }
+      for (const value of Object.values(node)) visit(value);
+    }
+    visit(payload);
+    return changed;
+  }
+
+  function maybeInjectFillPrompt(input, init, method) {
+    if (method !== 'POST') return init;
+    if (!parseCellGenerateUrl(input)) return init;
+    if (!fillOptionEnabled() || !isSpriteAssetKind()) return init;
+    if (typeof init?.body !== 'string') return init;
+    try {
+      const payload = JSON.parse(init.body);
+      const addon = fillPromptAddon();
+      const changed = injectPromptAddonIntoPayload(payload, addon);
+      if (!changed) return init;
+      const nextInit = { ...init, body: JSON.stringify(payload) };
+      setStatus('已为本次非地块生成注入“尽量占满格子”提示词');
+      return nextInit;
+    } catch {
+      return init;
+    }
+  }
+
+  function updateFillOptionUiState() {
+    const wrap = $('spriteFillAreaPromptWrap');
+    const checkbox = $('spriteFillAreaPrompt');
+    const note = $('spriteFillAreaPromptNote');
+    if (!wrap || !checkbox || !note) return;
+    const sprite = isSpriteAssetKind();
+    wrap.style.opacity = sprite ? '1' : '.6';
+    checkbox.disabled = !sprite;
+    note.textContent = sprite
+      ? '仅对非地块生图生效。会在发送给 AI 的最终提示词后追加“主体尽量占满当前所选格区域”的英文约束。'
+      : '当前为地块模式，此选项不会生效。';
+  }
+
+  function injectFillOptionUi() {
+    if ($('spriteFillAreaPromptWrap')) return true;
+    const spriteRadio = document.querySelector('input[name="assetKind"][value="sprite"]');
+    const promptInput = $('prompt') || document.querySelector('textarea');
+    const host = spriteRadio?.closest('label')?.parentElement || spriteRadio?.closest('.row') || promptInput?.parentElement;
+    if (!host) return false;
+    const wrap = document.createElement('div');
+    wrap.id = 'spriteFillAreaPromptWrap';
+    wrap.style.marginTop = '8px';
+    wrap.style.padding = '8px 10px';
+    wrap.style.border = '1px solid var(--border, #444)';
+    wrap.style.borderRadius = '8px';
+    wrap.style.background = 'rgba(255,255,255,.03)';
+    wrap.innerHTML = `
+      <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+        <input id="spriteFillAreaPrompt" type="checkbox" />
+        <span>
+          <div style="font-weight:700">非地块尽量占满格子（提示词增强）</div>
+          <div id="spriteFillAreaPromptNote" class="muted" style="font-size:12px;margin-top:2px"></div>
+        </span>
+      </label>
+    `;
+    host.appendChild(wrap);
+    const checkbox = $('spriteFillAreaPrompt');
+    checkbox.checked = fillOptionEnabled();
+    checkbox.addEventListener('change', () => {
+      setFillOptionEnabled(checkbox.checked);
+      updateFillOptionUiState();
+      setStatus(checkbox.checked
+        ? '已开启：非地块尽量占满格子（发送前自动注入提示词）'
+        : '已关闭：非地块尽量占满格子');
+    });
+    document.querySelectorAll('input[name="assetKind"]').forEach((radio) => {
+      radio.addEventListener('change', updateFillOptionUiState, true);
+    });
+    updateFillOptionUiState();
+    return true;
+  }
+
   async function refreshChangedCellNow(sheetId, index, token, attempt) {
     if (activeRefreshes.get(cellKey(sheetId, index)) !== token) return false;
     clearCellCaches(sheetId, index);
@@ -207,7 +363,8 @@
     const patched = async function pixelRegenerateSyncFetch(input, init = {}) {
       const method = String(init?.method || input?.method || 'GET').toUpperCase();
       const target = parseChangedCellUrl(input, method);
-      const response = await originalFetch(input, init);
+      const nextInit = maybeInjectFillPrompt(input, init, method);
+      const response = await originalFetch(input, nextInit);
       if (target && response.ok) {
         if (target.kind === 'delete') invalidateDeletedCell(target.sheetId, target.index);
         else invalidateGeneratedCell(target.sheetId, target.index);
@@ -223,6 +380,10 @@
     if (installed) return;
     installed = true;
     patchFetch();
+    if (!injectFillOptionUi()) {
+      const retry = () => injectFillOptionUi() || setTimeout(retry, 120);
+      setTimeout(retry, 120);
+    }
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', install);
