@@ -83,6 +83,14 @@
     if (swatch) swatch.style.background = 'transparent';
   }
 
+  function ensureCellContextMenuStabilityScript() {
+    if ($('cellContextMenuStabilityScript')) return;
+    const script = document.createElement('script');
+    script.id = 'cellContextMenuStabilityScript';
+    script.src = '/cell-context-menu-stability.js';
+    document.head.appendChild(script);
+  }
+
   function ensureBulkEnhancerScript() {
     window.__pixelEditorUseBulkEditor = true;
     if ($('pixelEditorBulkBgScript')) return;
@@ -234,6 +242,7 @@
 
     injectFloatingStyle();
     moveBgAdjustSection();
+    ensureCellContextMenuStabilityScript();
     ensureBulkEnhancerScript();
     ensureThumbnailScopeGuardScript();
     ensureSpriteExportPreviewFixScript();
