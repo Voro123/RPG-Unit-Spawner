@@ -10,6 +10,7 @@
     "mcp": "node mcp/server.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "pngjs": "^7.0.0"
   }
 }

@@ -32,6 +32,18 @@ Current scope:
 
 ## Behavior to preserve
 
+### Codex image-generation preference
+
+- When Codex is working in this repository and the custom MCP server `rpg-unit-spawner-minimax` is connected, use that MCP for RPG asset image generation before using Codex's built-in image-generation tools.
+- For project asset work, prefer MCP tools that write into project data directly:
+  - locate/create projects with `locate_project` or `create_project`,
+  - locate/create sheets with `list_sprite_sheets` or `create_sprite_sheet`,
+  - generate and overwrite a cell with `generate_sprite_cell_image`,
+  - overwrite a cell from supplied image data with `update_sprite_cell_image`.
+- For large images that occupy multiple sheet cells, use `update_sprite_cell_region_image` and provide `cellTags` with one role description per tile in row-major order whenever possible.
+- After changing sheet cells through MCP, keep or export the sheet skill documentation with `export_sprite_sheet_skill` so future AI agents can identify what each tile does.
+- Use Codex's built-in image generation only if this MCP is unavailable, returns an unrecoverable error, or the user explicitly asks for Codex's own image generator.
+
 ### Projects
 
 - Every API call that reads or writes project assets must stay project-scoped through `projectId` query/body or `x-project-id`.
