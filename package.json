@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "predev": "git pull",
-    "dev": "node server/index.js"
+    "dev": "node server/index.js",
+    "mcp": "node mcp/server.js"
   },
   "dependencies": {
     "express": "^4.19.2"
